@@ -1,0 +1,16 @@
+﻿node_modules/
+dist/
+coverage/
+.env
+.env.local
+.env.*.local
+client/dist/
+server/.cache/
+server/.tmp/
+*.log
+*.pid
+*-rendered.html
+.tools/
+.vercel/
+.DS_Store
+Thumbs.db

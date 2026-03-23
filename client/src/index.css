@@ -1,0 +1,55 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Playfair+Display:wght@700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    @apply min-h-screen bg-lazzat-cream text-lazzat-ink antialiased;
+    background-image:
+      radial-gradient(circle at top, rgba(209, 161, 62, 0.22), transparent 30%),
+      linear-gradient(180deg, #fff8f1 0%, #fff3e2 100%);
+    font-family: "Manrope", "Segoe UI", sans-serif;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: "Playfair Display", Georgia, serif;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .surface-card {
+    @apply border border-lazzat-gold/20 bg-white/90 p-5 shadow-lazzat backdrop-blur;
+    border-radius: 28px;
+  }
+
+  .section-label {
+    @apply text-xs font-extrabold uppercase tracking-[0.28em] text-lazzat-red/70;
+  }
+
+  .primary-button {
+    @apply inline-flex items-center justify-center rounded-full bg-lazzat-red px-5 py-3 text-sm font-bold text-white shadow-lg shadow-lazzat-red/25 transition hover:bg-lazzat-maroon;
+  }
+
+  .secondary-button {
+    @apply inline-flex items-center justify-center rounded-full border border-lazzat-gold/30 bg-white px-5 py-3 text-sm font-bold text-lazzat-maroon transition hover:border-lazzat-gold/60;
+  }
+
+  .field-input {
+    @apply w-full rounded-2xl border border-lazzat-gold/25 bg-white px-4 py-3 text-sm text-lazzat-ink outline-none transition focus:border-lazzat-red focus:ring-2 focus:ring-lazzat-red/10;
+  }
+}

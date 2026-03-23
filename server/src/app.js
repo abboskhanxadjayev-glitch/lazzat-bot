@@ -1,0 +1,39 @@
+﻿import cors from "cors";
+import express from "express";
+import { env } from "./config/env.js";
+import { errorHandler } from "./middleware/errorHandler.js";
+import categoryRoutes from "./routes/categoryRoutes.js";
+import orderRoutes from "./routes/orderRoutes.js";
+import productRoutes from "./routes/productRoutes.js";
+
+const app = express();
+
+const corsOrigin = env.corsOrigin === "*"
+  ? true
+  : env.corsOrigin.split(",").map((origin) => origin.trim());
+
+app.use(cors({ origin: corsOrigin }));
+app.use(express.json());
+
+app.get("/api/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    supabaseEnabled: env.hasSupabase,
+    supabaseConfigError: env.supabaseConfigError || null
+  });
+});
+
+app.use("/api/categories", categoryRoutes);
+app.use("/api/products", productRoutes);
+app.use("/api/orders", orderRoutes);
+
+app.use((req, res) => {
+  res.status(404).json({
+    message: `Topilmadi: ${req.method} ${req.originalUrl}`
+  });
+});
+
+app.use(errorHandler);
+
+export default app;

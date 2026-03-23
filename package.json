@@ -1,0 +1,23 @@
+{
+  "name": "lazzat-oshxonasi",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server",
+    "bot"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace client\" \"npm run dev --workspace server\" \"npm run dev --workspace bot\"",
+    "dev:client": "npm run dev --workspace client",
+    "dev:server": "npm run dev --workspace server",
+    "dev:bot": "npm run dev --workspace bot",
+    "build": "npm run build --workspace client",
+    "start:server": "npm run start --workspace server",
+    "start:bot": "npm run start --workspace bot"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "vercel": "^50.35.0"
+  }
+}

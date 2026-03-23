@@ -1,7 +1,8 @@
-﻿import "dotenv/config";
+import "dotenv/config";
 import app from "./app.js";
 import { env } from "./config/env.js";
 import { verifySupabaseConnection } from "./config/supabase.js";
+import { logTelegramConfiguration } from "./services/telegramService.js";
 
 app.listen(env.port, async () => {
   console.log(`Lazzat API listening on http://localhost:${env.port}`);
@@ -11,4 +12,6 @@ app.listen(env.port, async () => {
   if (!supabaseStatus.ok) {
     console.warn(`[supabase] order persistence unavailable: ${supabaseStatus.reason}`);
   }
+
+  logTelegramConfiguration();
 });

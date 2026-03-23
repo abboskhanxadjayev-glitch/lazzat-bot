@@ -1,7 +1,8 @@
-﻿import { env } from "../config/env.js";
+import { env } from "../config/env.js";
 import { supabase } from "../config/supabase.js";
 import { createAppError } from "../utils/appError.js";
 import { getProductsByIds } from "./catalogService.js";
+import { sendOrderNotification } from "./telegramService.js";
 
 function ensureSupabaseReady() {
   if (supabase) {
@@ -93,13 +94,34 @@ export async function createOrder(payload) {
 
   console.log(`[orders] Supabase order ${order.id} created successfully.`);
 
-  return {
+  const createdOrder = {
     id: order.id,
     status: order.status,
     totalAmount: Number(order.total_amount),
     createdAt: order.created_at,
     items
   };
+
+  try {
+    const telegramResponse = await sendOrderNotification({
+      orderId: createdOrder.id,
+      totalAmount: createdOrder.totalAmount,
+      items: createdOrder.items
+    });
+
+    console.log("[telegram] notification result", {
+      orderId: createdOrder.id,
+      messageId: telegramResponse.messageId
+    });
+  } catch (telegramError) {
+    console.error(`[telegram] failed to send notification for order ${createdOrder.id}`, telegramError);
+    throw createAppError(502, "Order saved but Telegram notification failed.", {
+      orderId: createdOrder.id,
+      reason: telegramError.message
+    });
+  }
+
+  return createdOrder;
 }
 
 export async function getOrders() {

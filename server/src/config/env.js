@@ -1,8 +1,15 @@
-﻿const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || "";
+const telegramChatId = process.env.TELEGRAM_CHAT_ID || "";
 
 function isPlaceholderValue(value) {
-  return value.includes("your-project-id") || value.includes("your-service-role-key");
+  return (
+    value.includes("your-project-id") ||
+    value.includes("your-service-role-key") ||
+    value.includes("your-telegram-bot-token") ||
+    value.includes("your-telegram-chat-id")
+  );
 }
 
 function isPrivilegedSupabaseKey(value) {
@@ -34,12 +41,21 @@ function getSupabaseConfigError() {
 }
 
 const supabaseConfigError = getSupabaseConfigError();
+const hasTelegramNotifications = Boolean(
+  telegramBotToken &&
+  telegramChatId &&
+  !isPlaceholderValue(telegramBotToken) &&
+  !isPlaceholderValue(telegramChatId)
+);
 
 export const env = {
   port: Number(process.env.PORT || 5000),
   corsOrigin: process.env.CORS_ORIGIN || "http://localhost:5173",
   supabaseUrl,
   supabaseServiceRoleKey,
+  telegramBotToken,
+  telegramChatId,
   supabaseConfigError,
-  hasSupabase: !supabaseConfigError
+  hasSupabase: !supabaseConfigError,
+  hasTelegramNotifications
 };

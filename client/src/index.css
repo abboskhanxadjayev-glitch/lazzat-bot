@@ -53,3 +53,77 @@
     @apply w-full rounded-2xl border border-lazzat-gold/25 bg-white px-4 py-3 text-sm text-lazzat-ink outline-none transition focus:border-lazzat-red focus:ring-2 focus:ring-lazzat-red/10;
   }
 }
+
+.checkout-map {
+  min-height: 300px;
+}
+
+.leaflet-container {
+  width: 100%;
+  height: 300px;
+  min-height: 300px;
+  z-index: 1;
+}
+
+.checkout-map .leaflet-container {
+  width: 100%;
+  background: linear-gradient(180deg, #fdf4ea 0%, #fffaf4 100%);
+  font-family: "Manrope", "Segoe UI", sans-serif;
+}
+
+.checkout-map .leaflet-control-zoom {
+  border: 0;
+  box-shadow: 0 14px 30px rgba(111, 16, 32, 0.12);
+}
+
+.checkout-map .leaflet-control-zoom a {
+  color: #6f1020;
+}
+
+.checkout-map .leaflet-control-attribution {
+  font-size: 10px;
+}
+
+.checkout-map .leaflet-popup-content-wrapper,
+.checkout-map .leaflet-popup-tip {
+  background: rgba(111, 16, 32, 0.97);
+  color: #fff;
+}
+
+.map-pin {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 3px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 10px 24px rgba(111, 16, 32, 0.24);
+}
+
+.map-pin__inner {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.map-pin::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.map-pin--restaurant {
+  background: #6f1020;
+}
+
+.map-pin--customer {
+  background: #b42318;
+}
+
+

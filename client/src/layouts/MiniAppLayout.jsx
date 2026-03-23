@@ -21,7 +21,7 @@ function MiniAppLayout() {
                 Lazzat Oshxonasi
               </Link>
               <p className="mt-2 max-w-[15rem] text-sm leading-6 text-white/80">
-                Milliy taomlar, issiq osh va qulay Telegram buyurtmasi.
+                Osh, fast food, pitsa, shirinlik va ichimliklar bir joyda.
               </p>
             </div>
 

@@ -1,14 +1,14 @@
 export const highlights = [
   {
-    value: "30 daqiqa",
-    label: "Tez yetkazib berish"
+    value: "8 bo'lim",
+    label: "Yangilangan menyu"
   },
   {
-    value: "Yangi",
-    label: "Kunlik osh"
+    value: "81 taom",
+    label: "Keng tanlov"
   },
   {
-    value: "Halol",
-    label: "Sifatli masalliqlar"
+    value: "Telegram",
+    label: "Qulay buyurtma"
   }
 ];

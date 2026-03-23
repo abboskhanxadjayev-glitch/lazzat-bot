@@ -102,7 +102,7 @@ function HomePage() {
       <PageHeader
         eyebrow="Kategoriya"
         title="Taom bo'limlari"
-        description="MVP versiyada asosiy kategoriyalar va ularning mahsulotlari ko'rsatiladi."
+        description="Yangilangan menyuda 8 ta asosiy kategoriya va 81 ta mahsulot ko'rsatiladi."
       />
 
       {isLoading ? (

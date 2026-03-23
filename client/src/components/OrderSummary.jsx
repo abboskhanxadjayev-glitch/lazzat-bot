@@ -1,6 +1,6 @@
 import { formatCurrency } from "../utils/formatCurrency";
 
-function OrderSummary({ totalItems, totalPrice }) {
+function OrderSummary({ totalItems, subtotal, deliveryFee, totalAmount, distanceKm }) {
   return (
     <section className="surface-card bg-surface">
       <div className="flex items-center justify-between">
@@ -17,16 +17,22 @@ function OrderSummary({ totalItems, totalPrice }) {
 
       <div className="mt-5 space-y-3 text-sm text-lazzat-ink/80">
         <div className="flex items-center justify-between">
-          <span>Mahsulotlar</span>
-          <span className="font-bold">{formatCurrency(totalPrice)}</span>
+          <span>Mahsulotlar summasi</span>
+          <span className="font-bold">{formatCurrency(subtotal)}</span>
         </div>
         <div className="flex items-center justify-between">
-          <span>Yetkazib berish</span>
-          <span className="font-bold text-emerald-700">Bepul</span>
+          <span>Yetkazib berish narxi</span>
+          <span className="font-bold">{formatCurrency(deliveryFee)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span>Hisoblangan masofa</span>
+          <span className="font-bold">
+            {distanceKm !== null ? `${distanceKm.toFixed(2)} km` : "Tanlanmagan"}
+          </span>
         </div>
         <div className="flex items-center justify-between border-t border-lazzat-gold/20 pt-3 text-base font-extrabold text-lazzat-maroon">
           <span>Jami</span>
-          <span>{formatCurrency(totalPrice)}</span>
+          <span>{formatCurrency(totalAmount)}</span>
         </div>
       </div>
     </section>

@@ -1,14 +1,25 @@
 import { z } from "zod";
 
 const phonePattern = /^[+]?[-()\d\s]{7,20}$/;
+
 export const ORDER_STATUS_VALUES = [
   "pending",
   "accepted",
   "preparing",
+  "ready_for_delivery",
   "on_the_way",
   "delivered",
   "cancelled"
 ];
+
+export const COURIER_STATUS_VALUES = ["pending", "approved", "blocked"];
+
+const telegramUserSchema = z.object({
+  id: z.number().int().positive("Telegram user ID noto'g'ri."),
+  username: z.string().nullable().optional(),
+  firstName: z.string().nullable().optional(),
+  lastName: z.string().nullable().optional()
+});
 
 export const createOrderSchema = z
   .object({
@@ -29,15 +40,7 @@ export const createOrderSchema = z
         })
       )
       .min(1, "Kamida bitta mahsulot bo'lishi kerak."),
-    telegramUser: z
-      .object({
-        id: z.number().optional(),
-        username: z.string().nullable().optional(),
-        firstName: z.string().nullable().optional(),
-        lastName: z.string().nullable().optional()
-      })
-      .nullable()
-      .optional()
+    telegramUser: telegramUserSchema.nullable().optional()
   })
   .superRefine((payload, context) => {
     const hasCustomerLat = typeof payload.customerLat === "number";
@@ -56,6 +59,24 @@ export const updateOrderStatusSchema = z.object({
   status: z.enum(ORDER_STATUS_VALUES, {
     errorMap: () => ({
       message: "Status noto'g'ri. Ruxsat etilgan statuslardan birini tanlang."
+    })
+  })
+});
+
+export const assignCourierSchema = z.object({
+  courierId: z.string().uuid("Kuryer ID noto'g'ri.").nullable().optional()
+});
+
+export const registerCourierSchema = z.object({
+  fullName: z.string().trim().min(2, "F.I.Sh. kamida 2 ta belgidan iborat bo'lishi kerak.").max(120).optional(),
+  phone: z.string().trim().regex(phonePattern, "Telefon raqami noto'g'ri formatda."),
+  telegramUser: telegramUserSchema
+});
+
+export const updateCourierStatusSchema = z.object({
+  status: z.enum(COURIER_STATUS_VALUES, {
+    errorMap: () => ({
+      message: "Kuryer statusi noto'g'ri."
     })
   })
 });

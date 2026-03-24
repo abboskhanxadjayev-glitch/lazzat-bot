@@ -46,8 +46,17 @@ function AdminOrderList({ orders, selectedOrderId, onSelect }) {
 
             <p className="mt-3 line-clamp-2 text-sm leading-6 text-lazzat-ink/75">{order.address}</p>
 
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs font-semibold uppercase tracking-[0.16em] text-lazzat-red/60">
+              <span>{order.items.length} ta mahsulot</span>
+              <span>
+                {order.courier?.fullName ? `Kuryer: ${order.courier.fullName}` : "Kuryer biriktirilmagan"}
+              </span>
+            </div>
+
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
-              <span className="font-semibold text-lazzat-ink/70">{order.items.length} ta mahsulot</span>
+              <span className="font-semibold text-lazzat-ink/70">
+                {order.assignedAt ? `Biriktirildi: ${formatDate(order.assignedAt)}` : "Biriktirish yo'q"}
+              </span>
               <span className="text-base font-bold text-lazzat-maroon">
                 {formatCurrency(order.totalAmount)}
               </span>

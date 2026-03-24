@@ -3,10 +3,18 @@ import { supabase } from "../config/supabase.js";
 import { createAppError } from "../utils/appError.js";
 import { getDeliveryDetails } from "../utils/delivery.js";
 import { getProductsByIds } from "./catalogService.js";
+import { ensureCourierSchemaReady, isCourierSchemaError } from "./courierSchemaService.js";
 import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
 import { sendOrderNotification } from "./telegramService.js";
 
-const ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
+const BASE_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
+const ENHANCED_ORDER_SELECT_FIELDS = `${BASE_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, created_at, updated_at)`;
+
+const ORDER_ASSIGNMENT_SCHEMA_TTL_MS = 60_000;
+let orderAssignmentSchemaCache = {
+  available: null,
+  checkedAt: 0
+};
 
 function ensureSupabaseReady() {
   if (supabase) {
@@ -22,6 +30,54 @@ function ensureSupabaseReady() {
       reason: env.supabaseConfigError
     }
   );
+}
+
+function isOrderAssignmentSchemaError(error) {
+  if (!error) {
+    return false;
+  }
+
+  const errorCode = error.code || "";
+  const errorMessage = error.message || "";
+
+  return (
+    isCourierSchemaError(error) ||
+    errorCode === "42703" ||
+    errorCode === "PGRST200" ||
+    errorMessage.includes("courier_id") ||
+    errorMessage.includes("assigned_at") ||
+    errorMessage.includes("relationship")
+  );
+}
+
+function hasFreshOrderAssignmentSchemaCache() {
+  return Date.now() - orderAssignmentSchemaCache.checkedAt < ORDER_ASSIGNMENT_SCHEMA_TTL_MS;
+}
+
+async function runOrderQuery(buildQuery) {
+  if (orderAssignmentSchemaCache.available !== false || !hasFreshOrderAssignmentSchemaCache()) {
+    const enhancedResult = await buildQuery(ENHANCED_ORDER_SELECT_FIELDS);
+
+    if (!enhancedResult.error) {
+      orderAssignmentSchemaCache = {
+        available: true,
+        checkedAt: Date.now()
+      };
+      return enhancedResult;
+    }
+
+    if (!isOrderAssignmentSchemaError(enhancedResult.error)) {
+      return enhancedResult;
+    }
+
+    orderAssignmentSchemaCache = {
+      available: false,
+      checkedAt: Date.now()
+    };
+    console.warn("[orders] assignment schema not detected, falling back to legacy select", enhancedResult.error.message);
+  }
+
+  return buildQuery(BASE_ORDER_SELECT_FIELDS);
 }
 
 function normalizeItems(products, requestedItems) {
@@ -80,6 +136,24 @@ function mapOrderItemRecord(item) {
   };
 }
 
+function mapCourierRecord(courierRecord) {
+  if (!courierRecord) {
+    return null;
+  }
+
+  return {
+    id: courierRecord.id,
+    telegramUserId: Number(courierRecord.telegram_user_id),
+    username: courierRecord.username || "",
+    fullName: courierRecord.full_name,
+    phone: courierRecord.phone || "",
+    status: courierRecord.status,
+    isActive: Boolean(courierRecord.is_active),
+    createdAt: courierRecord.created_at || null,
+    updatedAt: courierRecord.updated_at || null
+  };
+}
+
 function mapOrderRecord(orderRecord, orderItems = []) {
   const fallbackDelivery = orderRecord.telegram_payload?.delivery || null;
   const customerLat = orderRecord.customer_lat ?? fallbackDelivery?.customerLat ?? null;
@@ -98,6 +172,9 @@ function mapOrderRecord(orderRecord, orderItems = []) {
     ? items.reduce((sum, item) => sum + item.lineTotal, 0)
     : Math.max(totalAmount - deliveryFee, 0);
   const notes = orderRecord.notes || "";
+  const courier = mapCourierRecord(orderRecord.courier || null);
+  const courierId = orderRecord.courier_id ?? courier?.id ?? null;
+  const assignedAt = orderRecord.assigned_at ?? null;
 
   return {
     id: orderRecord.id,
@@ -115,6 +192,9 @@ function mapOrderRecord(orderRecord, orderItems = []) {
     totalAmount,
     createdAt: orderRecord.created_at,
     items,
+    courierId,
+    assignedAt,
+    courier,
     customer: {
       name: orderRecord.customer_name,
       phone: orderRecord.phone
@@ -133,6 +213,11 @@ function mapOrderRecord(orderRecord, orderItems = []) {
         lat: customerLat,
         lng: customerLng
       }
+    },
+    assignment: {
+      courierId,
+      assignedAt,
+      courier
     }
   };
 }
@@ -197,11 +282,11 @@ async function getMappedOrdersFromRecords(orderRecords = []) {
 }
 
 async function getOrderRecordById(orderId) {
-  const { data, error } = await supabase
+  const { data, error } = await runOrderQuery((selectFields) => supabase
     .from("orders")
-    .select(ORDER_SELECT_FIELDS)
+    .select(selectFields)
     .eq("id", orderId)
-    .maybeSingle();
+    .maybeSingle());
 
   if (error) {
     throw createAppError(500, "Buyurtma tafsilotlarini yuklab bo'lmadi.", error);
@@ -228,6 +313,28 @@ async function updateOrderRecordStatus(orderId, status) {
 
   if (!data) {
     throw createAppError(404, "Buyurtma topilmadi.", { orderId });
+  }
+
+  return data;
+}
+
+async function getCourierRecordById(courierId) {
+  const { data, error } = await supabase
+    .from("couriers")
+    .select("id, telegram_user_id, username, full_name, phone, status, is_active, created_at, updated_at")
+    .eq("id", courierId)
+    .maybeSingle();
+
+  if (error) {
+    if (isCourierSchemaError(error)) {
+      await ensureCourierSchemaReady();
+    }
+
+    throw createAppError(500, "Kuryer ma'lumotlarini yuklab bo'lmadi.", error);
+  }
+
+  if (!data) {
+    throw createAppError(404, "Kuryer topilmadi.", { courierId });
   }
 
   return data;
@@ -332,35 +439,54 @@ export async function createOrder(payload) {
 export async function getOrders() {
   ensureSupabaseReady();
 
-  const { data, error } = await supabase
+  const { data, error } = await runOrderQuery((selectFields) => supabase
     .from("orders")
-    .select(ORDER_SELECT_FIELDS)
+    .select(selectFields)
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(100));
 
   if (error) {
     throw createAppError(500, "Buyurtmalarni yuklab bo'lmadi.", error);
   }
 
-  return getMappedOrdersFromRecords(data);
+  return getMappedOrdersFromRecords(data || []);
 }
 
 export async function getOrdersByTelegramUserId(telegramUserId) {
   ensureSupabaseReady();
 
   const normalizedTelegramUserId = normalizeTelegramUserId(telegramUserId);
-  const { data, error } = await supabase
+  const { data, error } = await runOrderQuery((selectFields) => supabase
     .from("orders")
-    .select(ORDER_SELECT_FIELDS)
+    .select(selectFields)
     .contains("telegram_payload", { user: { id: normalizedTelegramUserId } })
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(100));
 
   if (error) {
     throw createAppError(500, "Mijoz buyurtmalarini yuklab bo'lmadi.", error);
   }
 
-  return getMappedOrdersFromRecords(data);
+  return getMappedOrdersFromRecords(data || []);
+}
+
+export async function getOrdersByCourierId(courierId) {
+  ensureSupabaseReady();
+  await ensureCourierSchemaReady();
+
+  const { data, error } = await runOrderQuery((selectFields) => supabase
+    .from("orders")
+    .select(selectFields)
+    .eq("courier_id", courierId)
+    .in("status", ["ready_for_delivery", "on_the_way"])
+    .order("created_at", { ascending: false })
+    .limit(100));
+
+  if (error) {
+    throw createAppError(500, "Kuryer buyurtmalarini yuklab bo'lmadi.", error);
+  }
+
+  return getMappedOrdersFromRecords(data || []);
 }
 
 export async function getOrderById(orderId) {
@@ -370,6 +496,47 @@ export async function getOrderById(orderId) {
   const itemsByOrderId = await getOrderItemsByOrderIds([orderId]);
 
   return mapOrderRecord(orderRecord, itemsByOrderId.get(orderId) || []);
+}
+
+export async function assignCourierToOrder(orderId, courierId = null) {
+  ensureSupabaseReady();
+  await ensureCourierSchemaReady();
+
+  await getOrderRecordById(orderId);
+
+  let nextCourierId = null;
+
+  if (courierId) {
+    const courierRecord = await getCourierRecordById(courierId);
+
+    if (courierRecord.status !== "approved" || !courierRecord.is_active) {
+      throw createAppError(400, "Faqat tasdiqlangan faol kuryerni biriktirish mumkin.", {
+        courierId,
+        status: courierRecord.status,
+        isActive: courierRecord.is_active
+      });
+    }
+
+    nextCourierId = courierRecord.id;
+  }
+
+  const { error } = await supabase
+    .from("orders")
+    .update({
+      courier_id: nextCourierId,
+      assigned_at: nextCourierId ? new Date().toISOString() : null
+    })
+    .eq("id", orderId);
+
+  if (error) {
+    if (isOrderAssignmentSchemaError(error)) {
+      await ensureCourierSchemaReady();
+    }
+
+    throw createAppError(500, "Buyurtmaga kuryer biriktirib bo'lmadi.", error);
+  }
+
+  return getOrderById(orderId);
 }
 
 export async function updateOrderStatus(orderId, status) {
@@ -392,3 +559,4 @@ export async function updateOrderStatus(orderId, status) {
 
   return updatedOrder;
 }
+

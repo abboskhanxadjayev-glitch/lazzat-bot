@@ -1,8 +1,19 @@
 import { Router } from "express";
-import { createOrder, getOrderById, getOrders, getOrdersByTelegramUserId, updateOrderStatus } from "../services/orderService.js";
+import {
+  assignCourierToOrder,
+  createOrder,
+  getOrderById,
+  getOrders,
+  getOrdersByTelegramUserId,
+  updateOrderStatus
+} from "../services/orderService.js";
 import { createAppError } from "../utils/appError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { createOrderSchema, updateOrderStatusSchema } from "../utils/validation.js";
+import {
+  assignCourierSchema,
+  createOrderSchema,
+  updateOrderStatusSchema
+} from "../utils/validation.js";
 
 const router = Router();
 
@@ -66,6 +77,30 @@ router.patch(
 
     res.json({
       message: "Buyurtma statusi yangilandi.",
+      data: order
+    });
+  })
+);
+
+router.patch(
+  "/:orderId/courier",
+  asyncHandler(async (req, res) => {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      throw createAppError(400, "Buyurtma ID kiritilishi kerak.");
+    }
+
+    const parsed = assignCourierSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      throw createAppError(400, "Kuryer biriktirish ma'lumotlari noto'g'ri.", parsed.error.flatten());
+    }
+
+    const order = await assignCourierToOrder(orderId, parsed.data.courierId || null);
+
+    res.json({
+      message: parsed.data.courierId ? "Kuryer biriktirildi." : "Kuryer biriktirishi olib tashlandi.",
       data: order
     });
   })

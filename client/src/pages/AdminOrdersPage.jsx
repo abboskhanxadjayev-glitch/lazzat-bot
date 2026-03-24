@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { assignCourierToOrder, updateOrderStatus } from "../api/client";
 import AdminOrderDetailCard from "../components/AdminOrderDetailCard";
 import AdminOrderList from "../components/AdminOrderList";
 import LiveFeedStatus from "../components/LiveFeedStatus";
 import { STATUS_LABELS } from "../components/OrderStatusBadge";
-import { updateOrderStatus } from "../api/client";
+import { useLiveCouriers } from "../hooks/useLiveCouriers";
 import { useLiveOrders } from "../hooks/useLiveOrders";
 import { formatCurrency } from "../utils/formatCurrency";
 
@@ -27,16 +28,27 @@ function AdminOrdersPage() {
     orders,
     isInitialLoading,
     error,
+    errorMessage,
     lastUpdatedAt,
     liveMode,
     applyOrderPatch
   } = useLiveOrders();
+  const {
+    couriers,
+    error: courierError,
+    errorMessage: courierErrorMessage
+  } = useLiveCouriers({
+    channelKey: "admin-order-couriers"
+  });
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [statusValue, setStatusValue] = useState("pending");
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [selectedCourierId, setSelectedCourierId] = useState("");
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
+  const [assignmentMessage, setAssignmentMessage] = useState("");
   const lastSelectedOrderIdRef = useRef("");
   const lastSyncedStatusRef = useRef(null);
 
@@ -54,7 +66,7 @@ function AdminOrdersPage() {
         return true;
       }
 
-      const haystack = [order.customerName, order.phone, order.address]
+      const haystack = [order.customerName, order.phone, order.address, order.courier?.fullName]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -83,6 +95,7 @@ function AdminOrdersPage() {
     if (!selectedOrder) {
       lastSelectedOrderIdRef.current = "";
       lastSyncedStatusRef.current = null;
+      setSelectedCourierId("");
       return;
     }
 
@@ -107,10 +120,13 @@ function AdminOrdersPage() {
 
       return selectedOrder.status;
     });
+
+    setSelectedCourierId(selectedOrder.courierId || "");
   }, [selectedOrder]);
 
   useEffect(() => {
     setStatusMessage("");
+    setAssignmentMessage("");
   }, [selectedOrderId]);
 
   const stats = useMemo(() => {
@@ -127,6 +143,37 @@ function AdminOrdersPage() {
       todayRevenue
     };
   }, [orders]);
+
+  const approvedCouriers = useMemo(
+    () => couriers.filter((courier) => courier.status === "approved" && courier.isActive),
+    [couriers]
+  );
+
+  const courierSelectOptions = useMemo(() => {
+    if (!selectedOrder?.courier) {
+      return approvedCouriers;
+    }
+
+    const hasSelectedAssignedCourier = approvedCouriers.some((courier) => courier.id === selectedOrder.courier.id);
+
+    if (hasSelectedAssignedCourier) {
+      return approvedCouriers;
+    }
+
+    return [selectedOrder.courier, ...approvedCouriers];
+  }, [approvedCouriers, selectedOrder]);
+
+  const assignmentUnavailableReason = useMemo(() => {
+    if (courierError?.details?.code === "COURIER_SCHEMA_NOT_READY") {
+      return "Kuryer biriktirish uchun courier schema hali Supabase bazasiga qo'llanmagan.";
+    }
+
+    if (courierErrorMessage) {
+      return courierErrorMessage;
+    }
+
+    return "";
+  }, [courierError, courierErrorMessage]);
 
   const handleSelectOrder = useCallback((orderId) => {
     setSelectedOrderId(orderId);
@@ -153,6 +200,48 @@ function AdminOrdersPage() {
       setStatusSaving(false);
     }
   }, [applyOrderPatch, selectedOrderId, statusValue]);
+
+  const handleAssignCourier = useCallback(async () => {
+    if (!selectedOrderId || !selectedCourierId) {
+      return;
+    }
+
+    setAssignmentSaving(true);
+    setAssignmentMessage("");
+
+    try {
+      const updatedOrder = await assignCourierToOrder(selectedOrderId, selectedCourierId);
+      applyOrderPatch(updatedOrder);
+      setSelectedCourierId(updatedOrder.courierId || "");
+      setAssignmentMessage("Kuryer muvaffaqiyatli biriktirildi.");
+    } catch (requestError) {
+      console.error("[admin] courier assignment error", requestError);
+      setAssignmentMessage(requestError.message || "Kuryerni biriktirib bo'lmadi.");
+    } finally {
+      setAssignmentSaving(false);
+    }
+  }, [applyOrderPatch, selectedCourierId, selectedOrderId]);
+
+  const handleClearCourier = useCallback(async () => {
+    if (!selectedOrderId) {
+      return;
+    }
+
+    setAssignmentSaving(true);
+    setAssignmentMessage("");
+
+    try {
+      const updatedOrder = await assignCourierToOrder(selectedOrderId, null);
+      applyOrderPatch(updatedOrder);
+      setSelectedCourierId("");
+      setAssignmentMessage("Kuryer biriktirishi olib tashlandi.");
+    } catch (requestError) {
+      console.error("[admin] courier unassign error", requestError);
+      setAssignmentMessage(requestError.message || "Kuryer biriktirishi olib tashlanmadi.");
+    } finally {
+      setAssignmentSaving(false);
+    }
+  }, [applyOrderPatch, selectedOrderId]);
 
   return (
     <section className="space-y-5">
@@ -201,7 +290,7 @@ function AdminOrdersPage() {
               <h2 className="mt-2 text-xl font-bold text-lazzat-maroon">Operator kuzatuvi</h2>
             </div>
             <p className="mt-3 text-sm leading-6 text-lazzat-ink/70">
-              Telefon, manzil, summa va status bo'yicha buyurtmalarni tez ko'rib chiqing.
+              Telefon, manzil, summa, status va biriktirilgan kuryer bo'yicha buyurtmalarni tez ko'rib chiqing.
             </p>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -213,7 +302,7 @@ function AdminOrdersPage() {
                   type="search"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Ism, telefon yoki manzil"
+                  placeholder="Ism, telefon, manzil yoki kuryer"
                   className="field-input"
                 />
               </label>
@@ -245,13 +334,13 @@ function AdminOrdersPage() {
             <div className="surface-card rounded-[28px] p-5 text-sm text-lazzat-ink/70">Buyurtmalar yuklanmoqda...</div>
           ) : null}
 
-          {error ? (
+          {errorMessage ? (
             <div className="surface-card rounded-[28px] border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
-              {error}
+              {errorMessage}
             </div>
           ) : null}
 
-          {!isInitialLoading && !error ? (
+          {!isInitialLoading && !errorMessage ? (
             <AdminOrderList
               orders={filteredOrders}
               selectedOrderId={selectedOrderId}
@@ -274,6 +363,14 @@ function AdminOrdersPage() {
             detailLoading={false}
             onStatusChange={setStatusValue}
             onStatusSubmit={handleStatusSubmit}
+            approvedCouriers={courierSelectOptions}
+            courierValue={selectedCourierId}
+            assignmentSaving={assignmentSaving}
+            assignmentMessage={assignmentMessage}
+            assignmentUnavailableReason={assignmentUnavailableReason}
+            onCourierChange={setSelectedCourierId}
+            onAssignCourier={handleAssignCourier}
+            onClearCourier={handleClearCourier}
           />
         </div>
       </div>
@@ -282,3 +379,4 @@ function AdminOrdersPage() {
 }
 
 export default AdminOrdersPage;
+

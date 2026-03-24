@@ -6,6 +6,7 @@ import CartPage from "./pages/CartPage";
 import CheckoutPage from "./pages/CheckoutPage";
 import CourierPage from "./pages/CourierPage";
 import HomePage from "./pages/HomePage";
+import AdminCouriersPage from "./pages/AdminCouriersPage";
 import AdminOrdersPage from "./pages/AdminOrdersPage";
 import OrdersPage from "./pages/OrdersPage";
 import ProductsPage from "./pages/ProductsPage";
@@ -23,6 +24,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/admin" element={<AdminLayout />}>
         <Route path="orders" element={<AdminOrdersPage />} />
+        <Route path="couriers" element={<AdminCouriersPage />} />
         <Route path="*" element={<Navigate replace to="/admin/orders" />} />
       </Route>
 

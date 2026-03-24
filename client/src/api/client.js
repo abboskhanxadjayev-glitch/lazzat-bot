@@ -74,6 +74,13 @@ function mergeAbortSignals(...signals) {
   return controller.signal;
 }
 
+function createRequestError(response, payload, fallbackMessage) {
+  const error = new Error(payload.message || fallbackMessage);
+  error.statusCode = response.status;
+  error.details = payload.details || null;
+  return error;
+}
+
 const API_BASE_URL = resolveApiBaseUrl();
 const DEFAULT_TIMEOUT_MS = 12000;
 
@@ -100,13 +107,16 @@ async function request(path, options = {}) {
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(payload.message || "So'rovni bajarib bo'lmadi.");
+      throw createRequestError(response, payload, "So'rovni bajarib bo'lmadi.");
     }
 
     return payload.data;
   } catch (error) {
     if (timeoutController.signal.aborted) {
-      throw new Error("Server busy, try again");
+      const timeoutError = new Error("Server busy, try again");
+      timeoutError.statusCode = 408;
+      timeoutError.details = { code: "REQUEST_TIMEOUT" };
+      throw timeoutError;
     }
 
     throw error;
@@ -154,6 +164,61 @@ export function getOrderById(orderId, options = {}) {
 
 export function updateOrderStatus(orderId, status, options = {}) {
   return request(`/orders/${orderId}/status`, {
+    ...options,
+    method: "PATCH",
+    body: JSON.stringify({ status })
+  });
+}
+
+export function assignCourierToOrder(orderId, courierId, options = {}) {
+  return request(`/orders/${orderId}/courier`, {
+    ...options,
+    method: "PATCH",
+    body: JSON.stringify({ courierId: courierId || null })
+  });
+}
+
+export function getCouriers(filters = {}, options = {}) {
+  const params = new URLSearchParams();
+
+  if (filters.status) {
+    params.set("status", filters.status);
+  }
+
+  const query = params.toString();
+  return request(`/couriers${query ? `?${query}` : ""}`, options);
+}
+
+export function getCourierProfile(telegramUserId, options = {}) {
+  return request("/couriers/me", {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      "x-telegram-user-id": String(telegramUserId)
+    }
+  });
+}
+
+export function getCourierOrders(telegramUserId, options = {}) {
+  return request("/couriers/me/orders", {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      "x-telegram-user-id": String(telegramUserId)
+    }
+  });
+}
+
+export function registerCourier(payload, options = {}) {
+  return request("/couriers/register", {
+    ...options,
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateCourierStatus(courierId, status, options = {}) {
+  return request(`/couriers/${courierId}/status`, {
     ...options,
     method: "PATCH",
     body: JSON.stringify({ status })

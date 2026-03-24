@@ -26,7 +26,15 @@ function AdminOrderDetailCard({
   statusSaving,
   detailLoading,
   onStatusChange,
-  onStatusSubmit
+  onStatusSubmit,
+  approvedCouriers = [],
+  courierValue,
+  assignmentSaving,
+  assignmentMessage,
+  assignmentUnavailableReason,
+  onCourierChange,
+  onAssignCourier,
+  onClearCourier
 }) {
   if (!order) {
     return (
@@ -40,6 +48,14 @@ function AdminOrderDetailCard({
   const mapUrl = canOpenMap
     ? `https://www.google.com/maps?q=${order.customerLat},${order.customerLng}`
     : null;
+  const assignedCourier = order.courier || null;
+  const canAssignCourier = !assignmentUnavailableReason;
+  const assignButtonDisabled = (
+    assignmentSaving ||
+    detailLoading ||
+    !courierValue ||
+    courierValue === (order.courierId || "")
+  );
 
   return (
     <section className="surface-card rounded-[32px] p-6 sm:p-7">
@@ -119,7 +135,7 @@ function AdminOrderDetailCard({
           <div>
             <p className="section-label">Status boshqaruvi</p>
             <p className="mt-2 text-sm leading-6 text-lazzat-ink/70">
-              Buyurtma holatini yangilang. Keyinchalik bu yerga operator Telegram xabarlari ulanishi mumkin.
+              Buyurtma holatini yangilang. Kuryerga tayyor buyurtmalar uchun `Yetkazishga tayyor` yoki `Yo'lda` statusidan foydalaning.
             </p>
           </div>
 
@@ -146,6 +162,84 @@ function AdminOrderDetailCard({
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="mt-6 rounded-[28px] border border-lazzat-gold/15 bg-white/80 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="section-label">Kuryer biriktirish</p>
+            <p className="mt-2 text-sm leading-6 text-lazzat-ink/70">
+              Tasdiqlangan kuryerni biriktiring, qayta biriktiring yoki kerak bo'lsa olib tashlang.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-[24px] border border-lazzat-gold/15 bg-lazzat-cream/60 p-4 text-sm text-lazzat-ink/75">
+          {assignedCourier ? (
+            <div className="space-y-2">
+              <p>
+                <span className="font-bold text-lazzat-maroon">Biriktirilgan kuryer:</span> {assignedCourier.fullName}
+              </p>
+              <p>
+                <span className="font-bold text-lazzat-maroon">Telefon:</span> {assignedCourier.phone || "-"}
+              </p>
+              <p>
+                <span className="font-bold text-lazzat-maroon">Telegram:</span> {assignedCourier.username ? `@${assignedCourier.username}` : "-"}
+              </p>
+              <p>
+                <span className="font-bold text-lazzat-maroon">Biriktirilgan vaqti:</span> {order.assignedAt ? formatDate(order.assignedAt) : "-"}
+              </p>
+            </div>
+          ) : (
+            <p>Hozircha kuryer biriktirilmagan.</p>
+          )}
+        </div>
+
+        {assignmentUnavailableReason ? (
+          <div className="mt-4 rounded-[24px] border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            {assignmentUnavailableReason}
+          </div>
+        ) : (
+          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center">
+            <select
+              value={courierValue}
+              onChange={(event) => onCourierChange(event.target.value)}
+              className="field-input lg:max-w-sm"
+              disabled={!canAssignCourier || assignmentSaving}
+            >
+              <option value="">Kuryerni tanlang</option>
+              {approvedCouriers.map((courier) => (
+                <option key={courier.id} value={courier.id}>
+                  {courier.fullName}{courier.phone ? ` - ${courier.phone}` : ""}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={onAssignCourier}
+              disabled={!canAssignCourier || assignButtonDisabled}
+              className="primary-button disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {assignmentSaving ? "Saqlanmoqda..." : "Kuryerni saqlash"}
+            </button>
+
+            <button
+              type="button"
+              onClick={onClearCourier}
+              disabled={!canAssignCourier || assignmentSaving || !order.courierId}
+              className="secondary-button disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Biriktirishni olib tashlash
+            </button>
+          </div>
+        )}
+
+        {assignmentMessage ? (
+          <div className={`mt-4 rounded-[24px] border p-4 text-sm ${assignmentMessage.includes("muvaffaqiyatli") ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700"}`}>
+            {assignmentMessage}
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-6">

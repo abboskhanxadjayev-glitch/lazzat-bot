@@ -1,4 +1,4 @@
-import { formatLastUpdated } from "../hooks/useLiveOrders";
+import { formatLastUpdated } from "../hooks/useLiveList";
 
 const MODE_LABELS = {
   connecting: "Ulanmoqda",

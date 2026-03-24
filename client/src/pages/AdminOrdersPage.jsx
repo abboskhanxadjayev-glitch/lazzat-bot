@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AdminOrderDetailCard from "../components/AdminOrderDetailCard";
 import AdminOrderList from "../components/AdminOrderList";
+import LiveFeedStatus from "../components/LiveFeedStatus";
 import { STATUS_LABELS } from "../components/OrderStatusBadge";
-import { getOrderById, getOrders, updateOrderStatus } from "../api/client";
+import { updateOrderStatus } from "../api/client";
+import { useLiveOrders } from "../hooks/useLiveOrders";
 import { formatCurrency } from "../utils/formatCurrency";
 
 const STATUS_FILTER_OPTIONS = [
@@ -21,44 +23,22 @@ function isSameLocalDay(dateValue, referenceDate) {
 }
 
 function AdminOrdersPage() {
-  const [orders, setOrders] = useState([]);
-  const [ordersLoading, setOrdersLoading] = useState(true);
-  const [ordersError, setOrdersError] = useState("");
+  const {
+    orders,
+    isInitialLoading,
+    error,
+    lastUpdatedAt,
+    liveMode,
+    applyOrderPatch
+  } = useLiveOrders();
   const [selectedOrderId, setSelectedOrderId] = useState("");
-  const [selectedOrder, setSelectedOrder] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
   const [statusValue, setStatusValue] = useState("pending");
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-
-  const loadOrders = useCallback(async () => {
-    setOrdersLoading(true);
-    setOrdersError("");
-
-    try {
-      const nextOrders = await getOrders();
-      setOrders(nextOrders);
-      setSelectedOrderId((currentId) => {
-        if (currentId && nextOrders.some((order) => order.id === currentId)) {
-          return currentId;
-        }
-
-        return nextOrders[0]?.id || "";
-      });
-    } catch (error) {
-      console.error("[admin] orders load error", error);
-      setOrdersError(error.message || "Buyurtmalarni yuklab bo'lmadi.");
-    } finally {
-      setOrdersLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadOrders();
-  }, [loadOrders]);
+  const lastSelectedOrderIdRef = useRef("");
+  const lastSyncedStatusRef = useRef(null);
 
   const filteredOrders = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -94,50 +74,43 @@ function AdminOrdersPage() {
     }
   }, [filteredOrders, selectedOrderId]);
 
+  const selectedOrder = useMemo(
+    () => orders.find((order) => order.id === selectedOrderId) || null,
+    [orders, selectedOrderId]
+  );
+
   useEffect(() => {
-    if (!selectedOrderId) {
-      setSelectedOrder(null);
+    if (!selectedOrder) {
+      lastSelectedOrderIdRef.current = "";
+      lastSyncedStatusRef.current = null;
       return;
     }
 
-    let isActive = true;
+    const selectedOrderChanged = lastSelectedOrderIdRef.current !== selectedOrder.id;
+    lastSelectedOrderIdRef.current = selectedOrder.id;
 
-    async function loadOrderDetail() {
-      setDetailLoading(true);
-      setDetailError("");
-      setStatusMessage("");
+    setStatusValue((currentValue) => {
+      const previousSyncedStatus = lastSyncedStatusRef.current;
+      lastSyncedStatusRef.current = selectedOrder.status;
 
-      try {
-        const order = await getOrderById(selectedOrderId);
-
-        if (!isActive) {
-          return;
-        }
-
-        setSelectedOrder(order);
-        setStatusValue(order.status);
-        setOrders((currentOrders) => currentOrders.map((currentOrder) => (
-          currentOrder.id === order.id ? order : currentOrder
-        )));
-      } catch (error) {
-        if (!isActive) {
-          return;
-        }
-
-        console.error("[admin] order detail load error", error);
-        setDetailError(error.message || "Buyurtma tafsilotlarini yuklab bo'lmadi.");
-      } finally {
-        if (isActive) {
-          setDetailLoading(false);
-        }
+      if (selectedOrderChanged) {
+        return selectedOrder.status;
       }
-    }
 
-    loadOrderDetail();
+      if (
+        previousSyncedStatus &&
+        currentValue !== previousSyncedStatus &&
+        currentValue !== selectedOrder.status
+      ) {
+        return currentValue;
+      }
 
-    return () => {
-      isActive = false;
-    };
+      return selectedOrder.status;
+    });
+  }, [selectedOrder]);
+
+  useEffect(() => {
+    setStatusMessage("");
   }, [selectedOrderId]);
 
   const stats = useMemo(() => {
@@ -169,22 +142,30 @@ function AdminOrdersPage() {
 
     try {
       const updatedOrder = await updateOrderStatus(selectedOrderId, statusValue);
-      setSelectedOrder(updatedOrder);
+      applyOrderPatch(updatedOrder);
       setStatusValue(updatedOrder.status);
-      setOrders((currentOrders) => currentOrders.map((currentOrder) => (
-        currentOrder.id === updatedOrder.id ? updatedOrder : currentOrder
-      )));
+      lastSyncedStatusRef.current = updatedOrder.status;
       setStatusMessage("Status muvaffaqiyatli yangilandi.");
-    } catch (error) {
-      console.error("[admin] status update error", error);
-      setStatusMessage(error.message || "Statusni yangilab bo'lmadi.");
+    } catch (requestError) {
+      console.error("[admin] status update error", requestError);
+      setStatusMessage(requestError.message || "Statusni yangilab bo'lmadi.");
     } finally {
       setStatusSaving(false);
     }
-  }, [selectedOrderId, statusValue]);
+  }, [applyOrderPatch, selectedOrderId, statusValue]);
 
   return (
     <section className="space-y-5">
+      <div className="flex flex-col gap-3 rounded-[28px] border border-emerald-200/70 bg-white/75 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="section-label">Jonli kuzatuv</p>
+          <p className="mt-2 text-sm text-lazzat-ink/70">
+            Buyurtmalar ro'yxati, hisoblagichlar va tafsilotlar avtomatik yangilanadi.
+          </p>
+        </div>
+        <LiveFeedStatus liveMode={liveMode} lastUpdatedAt={lastUpdatedAt} />
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <div className="surface-card rounded-[28px] p-5">
           <p className="section-label">Jami buyurtma</p>
@@ -215,14 +196,9 @@ function AdminOrdersPage() {
       <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <section className="space-y-4">
           <div className="surface-card rounded-[28px] p-5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="section-label">Buyurtmalar ro'yxati</p>
-                <h2 className="mt-2 text-xl font-bold text-lazzat-maroon">Operator kuzatuvi</h2>
-              </div>
-              <button type="button" className="secondary-button" onClick={loadOrders}>
-                Yangilash
-              </button>
+            <div>
+              <p className="section-label">Buyurtmalar ro'yxati</p>
+              <h2 className="mt-2 text-xl font-bold text-lazzat-maroon">Operator kuzatuvi</h2>
             </div>
             <p className="mt-3 text-sm leading-6 text-lazzat-ink/70">
               Telefon, manzil, summa va status bo'yicha buyurtmalarni tez ko'rib chiqing.
@@ -265,17 +241,17 @@ function AdminOrdersPage() {
             </p>
           </div>
 
-          {ordersLoading ? (
+          {isInitialLoading ? (
             <div className="surface-card rounded-[28px] p-5 text-sm text-lazzat-ink/70">Buyurtmalar yuklanmoqda...</div>
           ) : null}
 
-          {ordersError ? (
+          {error ? (
             <div className="surface-card rounded-[28px] border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
-              {ordersError}
+              {error}
             </div>
           ) : null}
 
-          {!ordersLoading && !ordersError ? (
+          {!isInitialLoading && !error ? (
             <AdminOrderList
               orders={filteredOrders}
               selectedOrderId={selectedOrderId}
@@ -285,12 +261,6 @@ function AdminOrdersPage() {
         </section>
 
         <div className="space-y-4">
-          {detailError ? (
-            <div className="surface-card rounded-[28px] border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
-              {detailError}
-            </div>
-          ) : null}
-
           {statusMessage ? (
             <div className={`surface-card rounded-[28px] p-5 text-sm ${statusMessage.includes("muvaffaqiyatli") ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-rose-200 bg-rose-50 text-rose-700"}`}>
               {statusMessage}
@@ -301,7 +271,7 @@ function AdminOrdersPage() {
             order={selectedOrder}
             statusValue={statusValue}
             statusSaving={statusSaving}
-            detailLoading={detailLoading}
+            detailLoading={false}
             onStatusChange={setStatusValue}
             onStatusSubmit={handleStatusSubmit}
           />

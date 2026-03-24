@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getOrders, updateOrderStatus } from "../api/client";
+import { updateOrderStatus } from "../api/client";
+import LiveFeedStatus from "../components/LiveFeedStatus";
 import OrderStatusBadge from "../components/OrderStatusBadge";
 import PageHeader from "../components/PageHeader";
+import { useLiveOrders } from "../hooks/useLiveOrders";
 
 function formatDistance(value) {
   if (value === null || value === undefined) {
@@ -21,29 +23,16 @@ function formatCoordinate(value) {
 }
 
 function CourierPage() {
-  const [orders, setOrders] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const {
+    orders,
+    isInitialLoading,
+    error,
+    lastUpdatedAt,
+    liveMode,
+    applyOrderPatch
+  } = useLiveOrders();
   const [activeOrderId, setActiveOrderId] = useState("");
-
-  const loadOrders = useCallback(async () => {
-    setIsLoading(true);
-    setError("");
-
-    try {
-      const nextOrders = await getOrders();
-      setOrders(nextOrders);
-    } catch (requestError) {
-      console.error("[courier] orders load error", requestError);
-      setError(requestError.message || "Yetkazmalarni yuklab bo'lmadi.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadOrders();
-  }, [loadOrders]);
+  const [statusMessage, setStatusMessage] = useState("");
 
   const activeDeliveries = useMemo(
     () => orders.filter((order) => order.status === "on_the_way"),
@@ -52,20 +41,18 @@ function CourierPage() {
 
   const handleDelivered = useCallback(async (orderId) => {
     setActiveOrderId(orderId);
-    setError("");
+    setStatusMessage("");
 
     try {
       const updatedOrder = await updateOrderStatus(orderId, "delivered");
-      setOrders((currentOrders) => currentOrders.map((currentOrder) => (
-        currentOrder.id === updatedOrder.id ? updatedOrder : currentOrder
-      )));
+      applyOrderPatch(updatedOrder);
     } catch (requestError) {
       console.error("[courier] delivered update error", requestError);
-      setError(requestError.message || "Statusni yangilab bo'lmadi.");
+      setStatusMessage(requestError.message || "Statusni yangilab bo'lmadi.");
     } finally {
       setActiveOrderId("");
     }
-  }, []);
+  }, [applyOrderPatch]);
 
   return (
     <div className="space-y-5">
@@ -75,17 +62,15 @@ function CourierPage() {
         description="Yo'ldagi buyurtmalarni ko'ring, xaritani oching va yetkazib berilganini belgilang."
       />
 
-      <section className="surface-card flex items-center justify-between gap-4">
+      <section className="surface-card flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="section-label">Aktiv buyurtmalar</p>
           <p className="mt-2 text-2xl font-bold text-lazzat-maroon">{activeDeliveries.length}</p>
         </div>
-        <button type="button" onClick={loadOrders} className="secondary-button">
-          Yangilash
-        </button>
+        <LiveFeedStatus liveMode={liveMode} lastUpdatedAt={lastUpdatedAt} />
       </section>
 
-      {isLoading ? (
+      {isInitialLoading ? (
         <section className="surface-card text-sm text-lazzat-ink/70">
           Yetkazmalar yuklanmoqda...
         </section>
@@ -97,7 +82,13 @@ function CourierPage() {
         </section>
       ) : null}
 
-      {!isLoading && !error && activeDeliveries.length === 0 ? (
+      {statusMessage ? (
+        <section className="surface-card border border-rose-200 bg-rose-50 text-sm text-rose-700">
+          {statusMessage}
+        </section>
+      ) : null}
+
+      {!isInitialLoading && !error && activeDeliveries.length === 0 ? (
         <section className="surface-card space-y-4 text-sm text-lazzat-ink/70">
           <p>Hozircha yo'ldagi buyurtmalar topilmadi.</p>
           <Link to="/" className="primary-button w-full">
@@ -106,7 +97,7 @@ function CourierPage() {
         </section>
       ) : null}
 
-      {!isLoading && !error ? (
+      {!isInitialLoading && !error ? (
         <div className="space-y-4">
           {activeDeliveries.map((order) => {
             const hasCoordinates = order.customerLat !== null && order.customerLng !== null;

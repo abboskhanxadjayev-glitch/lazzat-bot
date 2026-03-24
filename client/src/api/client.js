@@ -41,13 +41,51 @@ function resolveApiBaseUrl() {
   return isLocalClient() ? `${LOCAL_API_ORIGIN}/api` : `${PRODUCTION_API_ORIGIN}/api`;
 }
 
+function mergeAbortSignals(...signals) {
+  const activeSignals = signals.filter(Boolean);
+
+  if (!activeSignals.length) {
+    return null;
+  }
+
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+
+  const controller = new AbortController();
+
+  function abortFrom(sourceSignal) {
+    if (controller.signal.aborted) {
+      return;
+    }
+
+    controller.abort(sourceSignal.reason);
+  }
+
+  activeSignals.forEach((signal) => {
+    if (signal.aborted) {
+      abortFrom(signal);
+      return;
+    }
+
+    signal.addEventListener("abort", () => abortFrom(signal), { once: true });
+  });
+
+  return controller.signal;
+}
+
 const API_BASE_URL = resolveApiBaseUrl();
 const DEFAULT_TIMEOUT_MS = 12000;
 
 async function request(path, options = {}) {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {}, ...requestOptions } = options;
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const {
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    headers = {},
+    signal: externalSignal,
+    ...requestOptions
+  } = options;
+  const timeoutController = new AbortController();
+  const timeoutId = window.setTimeout(() => timeoutController.abort(), timeoutMs);
 
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -55,7 +93,7 @@ async function request(path, options = {}) {
         "Content-Type": "application/json",
         ...headers
       },
-      signal: controller.signal,
+      signal: mergeAbortSignals(timeoutController.signal, externalSignal),
       ...requestOptions
     });
 
@@ -67,7 +105,7 @@ async function request(path, options = {}) {
 
     return payload.data;
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (timeoutController.signal.aborted) {
       throw new Error("Server busy, try again");
     }
 
@@ -77,11 +115,11 @@ async function request(path, options = {}) {
   }
 }
 
-export function getCategories() {
-  return request("/categories");
+export function getCategories(options = {}) {
+  return request("/categories", options);
 }
 
-export function getProducts(filters = {}) {
+export function getProducts(filters = {}, options = {}) {
   const params = new URLSearchParams();
 
   if (filters.categoryId) {
@@ -93,37 +131,41 @@ export function getProducts(filters = {}) {
   }
 
   const query = params.toString();
-  return request(`/products${query ? `?${query}` : ""}`);
+  return request(`/products${query ? `?${query}` : ""}`, options);
 }
 
-export function getOrders() {
-  return request("/orders");
+export function getOrders(options = {}) {
+  return request("/orders", options);
 }
 
-export function getMyOrders(telegramUserId) {
+export function getMyOrders(telegramUserId, options = {}) {
   return request("/orders/my-orders", {
+    ...options,
     headers: {
+      ...(options.headers || {}),
       "x-telegram-user-id": String(telegramUserId)
     }
   });
 }
 
-export function getOrderById(orderId) {
-  return request(`/orders/${orderId}`);
+export function getOrderById(orderId, options = {}) {
+  return request(`/orders/${orderId}`, options);
 }
 
-export function updateOrderStatus(orderId, status) {
+export function updateOrderStatus(orderId, status, options = {}) {
   return request(`/orders/${orderId}/status`, {
+    ...options,
     method: "PATCH",
     body: JSON.stringify({ status })
   });
 }
 
-export function createOrder(order) {
+export function createOrder(order, options = {}) {
   return request("/orders", {
+    ...options,
     method: "POST",
     body: JSON.stringify(order),
-    timeoutMs: 12000
+    timeoutMs: options.timeoutMs || 12000
   });
 }
 

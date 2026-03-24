@@ -4,6 +4,7 @@ import AdminLayout from "./layouts/AdminLayout";
 import MiniAppLayout from "./layouts/MiniAppLayout";
 import CartPage from "./pages/CartPage";
 import CheckoutPage from "./pages/CheckoutPage";
+import CourierPage from "./pages/CourierPage";
 import HomePage from "./pages/HomePage";
 import AdminOrdersPage from "./pages/AdminOrdersPage";
 import OrdersPage from "./pages/OrdersPage";
@@ -29,6 +30,7 @@ function AppRoutes() {
         <Route index element={<HomePage />} />
         <Route path="categories/:categorySlug" element={<ProductsPage />} />
         <Route path="orders" element={<OrdersPage />} />
+        <Route path="courier" element={<CourierPage />} />
         <Route path="cart" element={<CartPage />} />
         <Route path="checkout" element={<CheckoutPage />} />
         <Route path="*" element={<Navigate replace to="/" />} />

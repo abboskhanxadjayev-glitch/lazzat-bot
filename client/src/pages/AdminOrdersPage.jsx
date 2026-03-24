@@ -1,7 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AdminOrderDetailCard from "../components/AdminOrderDetailCard";
 import AdminOrderList from "../components/AdminOrderList";
+import { STATUS_LABELS } from "../components/OrderStatusBadge";
 import { getOrderById, getOrders, updateOrderStatus } from "../api/client";
+import { formatCurrency } from "../utils/formatCurrency";
+
+const STATUS_FILTER_OPTIONS = [
+  { value: "all", label: "Barchasi" },
+  ...Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
+];
+
+function isSameLocalDay(dateValue, referenceDate) {
+  const date = new Date(dateValue);
+
+  return (
+    date.getFullYear() === referenceDate.getFullYear()
+    && date.getMonth() === referenceDate.getMonth()
+    && date.getDate() === referenceDate.getDate()
+  );
+}
 
 function AdminOrdersPage() {
   const [orders, setOrders] = useState([]);
@@ -14,6 +31,8 @@ function AdminOrdersPage() {
   const [statusValue, setStatusValue] = useState("pending");
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const loadOrders = useCallback(async () => {
     setOrdersLoading(true);
@@ -40,6 +59,40 @@ function AdminOrdersPage() {
   useEffect(() => {
     loadOrders();
   }, [loadOrders]);
+
+  const filteredOrders = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    return orders.filter((order) => {
+      const matchesStatus = statusFilter === "all" || order.status === statusFilter;
+
+      if (!matchesStatus) {
+        return false;
+      }
+
+      if (!normalizedQuery) {
+        return true;
+      }
+
+      const haystack = [order.customerName, order.phone, order.address]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedQuery);
+    });
+  }, [orders, searchQuery, statusFilter]);
+
+  useEffect(() => {
+    if (!filteredOrders.length) {
+      setSelectedOrderId("");
+      return;
+    }
+
+    if (!selectedOrderId || !filteredOrders.some((order) => order.id === selectedOrderId)) {
+      setSelectedOrderId(filteredOrders[0].id);
+    }
+  }, [filteredOrders, selectedOrderId]);
 
   useEffect(() => {
     if (!selectedOrderId) {
@@ -88,15 +141,17 @@ function AdminOrdersPage() {
   }, [selectedOrderId]);
 
   const stats = useMemo(() => {
-    const totalRevenue = orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
-    const pendingCount = orders.filter((order) => order.status === "pending").length;
-    const onTheWayCount = orders.filter((order) => order.status === "on_the_way").length;
+    const today = new Date();
+    const todayOrders = orders.filter((order) => isSameLocalDay(order.createdAt, today));
+    const todayRevenue = todayOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
 
     return {
       totalOrders: orders.length,
-      totalRevenue,
-      pendingCount,
-      onTheWayCount
+      pendingCount: orders.filter((order) => order.status === "pending").length,
+      onTheWayCount: orders.filter((order) => order.status === "on_the_way").length,
+      deliveredCount: orders.filter((order) => order.status === "delivered").length,
+      todayOrders: todayOrders.length,
+      todayRevenue
     };
   }, [orders]);
 
@@ -130,7 +185,7 @@ function AdminOrdersPage() {
 
   return (
     <section className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <div className="surface-card rounded-[28px] p-5">
           <p className="section-label">Jami buyurtma</p>
           <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.totalOrders}</p>
@@ -144,8 +199,16 @@ function AdminOrdersPage() {
           <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.onTheWayCount}</p>
         </div>
         <div className="surface-card rounded-[28px] p-5">
-          <p className="section-label">Aylanma</p>
-          <p className="mt-3 text-2xl font-bold text-lazzat-maroon">{new Intl.NumberFormat("uz-UZ", { style: "currency", currency: "UZS", maximumFractionDigits: 0 }).format(stats.totalRevenue)}</p>
+          <p className="section-label">Yetkazildi</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.deliveredCount}</p>
+        </div>
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">Bugungi aylanma</p>
+          <p className="mt-3 text-2xl font-bold text-lazzat-maroon">{formatCurrency(stats.todayRevenue)}</p>
+        </div>
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">Bugungi buyurtma</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.todayOrders}</p>
         </div>
       </div>
 
@@ -164,6 +227,42 @@ function AdminOrdersPage() {
             <p className="mt-3 text-sm leading-6 text-lazzat-ink/70">
               Telefon, manzil, summa va status bo'yicha buyurtmalarni tez ko'rib chiqing.
             </p>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-[0.16em] text-lazzat-red/65">
+                  Qidirish
+                </span>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Ism, telefon yoki manzil"
+                  className="field-input"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-[0.16em] text-lazzat-red/65">
+                  Status filter
+                </span>
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="field-input"
+                >
+                  {STATUS_FILTER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <p className="mt-3 text-sm text-lazzat-ink/60">
+              Topildi: <span className="font-bold text-lazzat-maroon">{filteredOrders.length}</span>
+            </p>
           </div>
 
           {ordersLoading ? (
@@ -178,7 +277,7 @@ function AdminOrdersPage() {
 
           {!ordersLoading && !ordersError ? (
             <AdminOrderList
-              orders={orders}
+              orders={filteredOrders}
               selectedOrderId={selectedOrderId}
               onSelect={handleSelectOrder}
             />

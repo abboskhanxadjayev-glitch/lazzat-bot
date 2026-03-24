@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createOrder, getOrders } from "../services/orderService.js";
+import { createOrder, getOrderById, getOrders } from "../services/orderService.js";
 import { createAppError } from "../utils/appError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { createOrderSchema } from "../utils/validation.js";
@@ -11,6 +11,20 @@ router.get(
   asyncHandler(async (_req, res) => {
     const orders = await getOrders();
     res.json({ data: orders });
+  })
+);
+
+router.get(
+  "/:orderId",
+  asyncHandler(async (req, res) => {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      throw createAppError(400, "Buyurtma ID kiritilishi kerak.");
+    }
+
+    const order = await getOrderById(orderId);
+    res.json({ data: order });
   })
 );
 

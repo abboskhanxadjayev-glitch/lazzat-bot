@@ -6,6 +6,7 @@ import CartPage from "./pages/CartPage";
 import CheckoutPage from "./pages/CheckoutPage";
 import HomePage from "./pages/HomePage";
 import AdminOrdersPage from "./pages/AdminOrdersPage";
+import OrdersPage from "./pages/OrdersPage";
 import ProductsPage from "./pages/ProductsPage";
 
 function AppRoutes() {
@@ -27,6 +28,7 @@ function AppRoutes() {
       <Route path="/" element={<MiniAppLayout />}>
         <Route index element={<HomePage />} />
         <Route path="categories/:categorySlug" element={<ProductsPage />} />
+        <Route path="orders" element={<OrdersPage />} />
         <Route path="cart" element={<CartPage />} />
         <Route path="checkout" element={<CheckoutPage />} />
         <Route path="*" element={<Navigate replace to="/" />} />

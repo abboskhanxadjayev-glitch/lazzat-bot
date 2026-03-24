@@ -8,12 +8,12 @@ const STATUS_STYLES = {
 };
 
 const STATUS_LABELS = {
-  pending: "Pending",
-  accepted: "Accepted",
-  preparing: "Preparing",
-  on_the_way: "On the way",
-  delivered: "Delivered",
-  cancelled: "Cancelled"
+  pending: "Kutilmoqda",
+  accepted: "Qabul qilindi",
+  preparing: "Tayyorlanmoqda",
+  on_the_way: "Yo'lda",
+  delivered: "Yetkazildi",
+  cancelled: "Bekor qilindi"
 };
 
 function OrderStatusBadge({ status }) {

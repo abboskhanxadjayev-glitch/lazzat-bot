@@ -1,7 +1,15 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState
+} from "react";
 
 const STORAGE_KEY = "lazzat-oshxonasi-cart";
-const CartContext = createContext(null);
+const CartStateContext = createContext(null);
+const CartActionsContext = createContext(null);
 
 function getInitialCart() {
   if (typeof window === "undefined") {
@@ -16,14 +24,23 @@ function getInitialCart() {
   }
 }
 
+function persistCart(cartItems) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cartItems));
+    console.log("[cart] persisted", { items: cartItems.length });
+  } catch (error) {
+    console.error("[cart] persist failed", error);
+  }
+}
+
 export function CartProvider({ children }) {
+  console.count("CartProvider render");
+
   const [cartItems, setCartItems] = useState(getInitialCart);
 
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cartItems));
-  }, [cartItems]);
+  const addItem = useCallback((product) => {
+    console.log("[cart] add item", { productId: product.id });
 
-  function addItem(product) {
     setCartItems((currentItems) => {
       const existingItem = currentItems.find((item) => item.id === product.id);
 
@@ -46,9 +63,11 @@ export function CartProvider({ children }) {
         }
       ];
     });
-  }
+  }, []);
 
-  function decrementItem(productId) {
+  const decrementItem = useCallback((productId) => {
+    console.log("[cart] decrement item", { productId });
+
     setCartItems((currentItems) =>
       currentItems
         .map((item) =>
@@ -58,47 +77,110 @@ export function CartProvider({ children }) {
         )
         .filter((item) => item.quantity > 0)
     );
-  }
+  }, []);
 
-  function removeItem(productId) {
+  const removeItem = useCallback((productId) => {
+    console.log("[cart] remove item", { productId });
+
     setCartItems((currentItems) =>
       currentItems.filter((item) => item.id !== productId)
     );
-  }
+  }, []);
 
-  function clearCart() {
+  const clearCart = useCallback(() => {
+    console.log("[cart] clear cart");
     setCartItems([]);
-  }
+  }, []);
 
-  const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0);
-  const totalPrice = cartItems.reduce(
-    (sum, item) => sum + item.quantity * item.price,
-    0
+  const totalItems = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.quantity, 0),
+    [cartItems]
+  );
+  const totalPrice = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.quantity * item.price, 0),
+    [cartItems]
+  );
+
+  useEffect(() => {
+    console.log("[cart] state updated", {
+      itemKinds: cartItems.length,
+      totalItems,
+      totalPrice
+    });
+  }, [cartItems, totalItems, totalPrice]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    console.log("[cart] scheduling persistence", { items: cartItems.length });
+
+    const persist = () => persistCart(cartItems);
+
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(persist, { timeout: 300 });
+
+      return () => {
+        if (typeof window.cancelIdleCallback === "function") {
+          window.cancelIdleCallback(idleId);
+        }
+      };
+    }
+
+    const timeoutId = window.setTimeout(persist, 120);
+    return () => window.clearTimeout(timeoutId);
+  }, [cartItems]);
+
+  const stateValue = useMemo(
+    () => ({
+      cartItems,
+      totalItems,
+      totalPrice
+    }),
+    [cartItems, totalItems, totalPrice]
+  );
+
+  const actionsValue = useMemo(
+    () => ({
+      addItem,
+      decrementItem,
+      removeItem,
+      clearCart
+    }),
+    [addItem, decrementItem, removeItem, clearCart]
   );
 
   return (
-    <CartContext.Provider
-      value={{
-        cartItems,
-        addItem,
-        decrementItem,
-        removeItem,
-        clearCart,
-        totalItems,
-        totalPrice
-      }}
-    >
-      {children}
-    </CartContext.Provider>
+    <CartActionsContext.Provider value={actionsValue}>
+      <CartStateContext.Provider value={stateValue}>{children}</CartStateContext.Provider>
+    </CartActionsContext.Provider>
   );
 }
 
-export function useCart() {
-  const context = useContext(CartContext);
+export function useCartState() {
+  const context = useContext(CartStateContext);
 
   if (!context) {
-    throw new Error("useCart must be used within a CartProvider.");
+    throw new Error("useCartState must be used within a CartProvider.");
   }
 
   return context;
+}
+
+export function useCartActions() {
+  const context = useContext(CartActionsContext);
+
+  if (!context) {
+    throw new Error("useCartActions must be used within a CartProvider.");
+  }
+
+  return context;
+}
+
+export function useCart() {
+  return {
+    ...useCartState(),
+    ...useCartActions()
+  };
 }

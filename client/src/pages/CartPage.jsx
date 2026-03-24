@@ -1,18 +1,14 @@
 import { Link } from "react-router-dom";
 import CartItem from "../components/CartItem";
-import OrderSummary from "../components/OrderSummary";
+import CartSummary from "../components/CartSummary";
 import PageHeader from "../components/PageHeader";
-import { useCart } from "../context/CartContext";
+import { useCartActions, useCartState } from "../context/CartContext";
 
 function CartPage() {
-  const {
-    cartItems,
-    addItem,
-    decrementItem,
-    removeItem,
-    totalItems,
-    totalPrice
-  } = useCart();
+  console.count("CartPage render");
+
+  const { cartItems, totalItems, totalPrice } = useCartState();
+  const { addItem, decrementItem, removeItem } = useCartActions();
 
   if (cartItems.length === 0) {
     return (
@@ -56,16 +52,7 @@ function CartPage() {
         ))}
       </div>
 
-      <OrderSummary totalItems={totalItems} totalPrice={totalPrice} />
-
-      <div className="flex gap-3">
-        <Link to="/" className="secondary-button flex-1">
-          Yana tanlash
-        </Link>
-        <Link to="/checkout" className="primary-button flex-1">
-          Rasmiylashtirish
-        </Link>
-      </div>
+      <CartSummary totalItems={totalItems} totalPrice={totalPrice} />
     </div>
   );
 }

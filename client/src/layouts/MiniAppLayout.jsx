@@ -1,11 +1,13 @@
 import { Link, Outlet } from "react-router-dom";
 import BottomNav from "../components/BottomNav";
-import { useCart } from "../context/CartContext";
+import { useCartState } from "../context/CartContext";
 import { useTelegram } from "../hooks/useTelegram";
 import { formatCurrency } from "../utils/formatCurrency";
 
 function MiniAppLayout() {
-  const { totalItems, totalPrice } = useCart();
+  console.count("MiniAppLayout render");
+
+  const { totalItems, totalPrice } = useCartState();
   const { displayName } = useTelegram();
 
   return (

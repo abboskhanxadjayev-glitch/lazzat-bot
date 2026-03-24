@@ -1,5 +1,5 @@
 import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createOrder } from "../api/client";
 import CheckoutForm from "../components/CheckoutForm";
 import LocationPicker from "../components/LocationPicker";
@@ -43,6 +43,7 @@ function formatDistanceDisplay(value) {
 function CheckoutPage() {
   console.count("CheckoutPage render");
 
+  const navigate = useNavigate();
   const { cartItems, totalItems, totalPrice } = useCartState();
   const { clearCart } = useCartActions();
   const { user, displayName, webApp } = useTelegram();
@@ -241,9 +242,18 @@ function CheckoutPage() {
           </p>
         </section>
 
-        <Link to="/" className="primary-button w-full">
-          Bosh sahifaga qaytish
-        </Link>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => navigate("/orders")}
+            className="secondary-button w-full"
+          >
+            Buyurtmalarimni ko'rish
+          </button>
+          <Link to="/" className="primary-button w-full">
+            Bosh sahifaga qaytish
+          </Link>
+        </div>
       </div>
     );
   }

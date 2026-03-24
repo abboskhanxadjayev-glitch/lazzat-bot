@@ -1,8 +1,8 @@
 export const RESTAURANT_LOCATION = {
   name: "Lazzat Oshxonasi",
-  address: "7R65+GMJ, Tinchlik ko'chasi, Yangiyer, Sirdaryo viloyati",
-  latitude: 40.275,
-  longitude: 68.8225
+  address: "7R65+GMJ, Tinchlik ko‘chasi, Yangiyer, Sirdaryo viloyati",
+  latitude: 40.261318,
+  longitude: 68.809088
 };
 
 export const DELIVERY_RATE_PER_KM = 5000;

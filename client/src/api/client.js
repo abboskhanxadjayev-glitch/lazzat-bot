@@ -100,6 +100,14 @@ export function getOrders() {
   return request("/orders");
 }
 
+export function getMyOrders(telegramUserId) {
+  return request("/orders/my-orders", {
+    headers: {
+      "x-telegram-user-id": String(telegramUserId)
+    }
+  });
+}
+
 export function getOrderById(orderId) {
   return request(`/orders/${orderId}`);
 }

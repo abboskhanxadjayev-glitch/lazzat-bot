@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getCategories, getProducts } from "../api/client";
 import PageHeader from "../components/PageHeader";
-import ProductCard from "../components/ProductCard";
-import { useCart } from "../context/CartContext";
+import ProductGrid from "../components/ProductGrid";
+import { useCartActions } from "../context/CartContext";
 
 function ProductsPage() {
+  console.count("ProductsPage render");
+
   const { categorySlug } = useParams();
-  const { addItem } = useCart();
+  const { addItem } = useCartActions();
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -15,6 +17,9 @@ function ProductsPage() {
 
   useEffect(() => {
     let isMounted = true;
+
+    setIsLoading(true);
+    setError("");
 
     async function loadPageData() {
       try {
@@ -47,7 +52,10 @@ function ProductsPage() {
     };
   }, [categorySlug]);
 
-  const activeCategory = categories.find((category) => category.slug === categorySlug);
+  const activeCategory = useMemo(
+    () => categories.find((category) => category.slug === categorySlug),
+    [categories, categorySlug]
+  );
 
   return (
     <div className="space-y-5">
@@ -97,11 +105,7 @@ function ProductsPage() {
           </p>
         </section>
       ) : (
-        <div className="space-y-4">
-          {products.map((product) => (
-            <ProductCard key={product.id} product={product} onAdd={addItem} />
-          ))}
-        </div>
+        <ProductGrid products={products} onAdd={addItem} />
       )}
     </div>
   );

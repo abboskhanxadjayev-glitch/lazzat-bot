@@ -1,6 +1,15 @@
+import { memo } from "react";
 import { formatCurrency } from "../utils/formatCurrency";
 
-function OrderSummary({ totalItems, subtotal, deliveryFee, totalAmount, distanceKm }) {
+const OrderSummary = memo(function OrderSummary({
+  totalItems,
+  subtotal,
+  deliveryFee,
+  totalAmount,
+  distanceKm
+}) {
+  console.count("OrderSummary render");
+
   return (
     <section className="surface-card bg-surface">
       <div className="flex items-center justify-between">
@@ -37,6 +46,6 @@ function OrderSummary({ totalItems, subtotal, deliveryFee, totalAmount, distance
       </div>
     </section>
   );
-}
+});
 
 export default OrderSummary;

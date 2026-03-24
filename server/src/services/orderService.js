@@ -6,6 +6,8 @@ import { getProductsByIds } from "./catalogService.js";
 import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
 import { sendOrderNotification } from "./telegramService.js";
 
+const ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
+
 function ensureSupabaseReady() {
   if (supabase) {
     return;
@@ -187,10 +189,17 @@ async function getOrderItemsByOrderIds(orderIds = []) {
   }, new Map());
 }
 
+async function getMappedOrdersFromRecords(orderRecords = []) {
+  const orderIds = orderRecords.map((order) => order.id);
+  const itemsByOrderId = await getOrderItemsByOrderIds(orderIds);
+
+  return orderRecords.map((order) => mapOrderRecord(order, itemsByOrderId.get(order.id) || []));
+}
+
 async function getOrderRecordById(orderId) {
   const { data, error } = await supabase
     .from("orders")
-    .select("id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload")
+    .select(ORDER_SELECT_FIELDS)
     .eq("id", orderId)
     .maybeSingle();
 
@@ -222,6 +231,16 @@ async function updateOrderRecordStatus(orderId, status) {
   }
 
   return data;
+}
+
+function normalizeTelegramUserId(telegramUserId) {
+  const parsedTelegramUserId = Number(telegramUserId);
+
+  if (!Number.isInteger(parsedTelegramUserId) || parsedTelegramUserId <= 0) {
+    throw createAppError(400, "Telegram user ID noto'g'ri yoki kiritilmagan.");
+  }
+
+  return parsedTelegramUserId;
 }
 
 export async function createOrder(payload) {
@@ -315,7 +334,7 @@ export async function getOrders() {
 
   const { data, error } = await supabase
     .from("orders")
-    .select("id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload")
+    .select(ORDER_SELECT_FIELDS)
     .order("created_at", { ascending: false })
     .limit(100);
 
@@ -323,10 +342,25 @@ export async function getOrders() {
     throw createAppError(500, "Buyurtmalarni yuklab bo'lmadi.", error);
   }
 
-  const orderIds = data.map((order) => order.id);
-  const itemsByOrderId = await getOrderItemsByOrderIds(orderIds);
+  return getMappedOrdersFromRecords(data);
+}
 
-  return data.map((order) => mapOrderRecord(order, itemsByOrderId.get(order.id) || []));
+export async function getOrdersByTelegramUserId(telegramUserId) {
+  ensureSupabaseReady();
+
+  const normalizedTelegramUserId = normalizeTelegramUserId(telegramUserId);
+  const { data, error } = await supabase
+    .from("orders")
+    .select(ORDER_SELECT_FIELDS)
+    .contains("telegram_payload", { user: { id: normalizedTelegramUserId } })
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) {
+    throw createAppError(500, "Mijoz buyurtmalarini yuklab bo'lmadi.", error);
+  }
+
+  return getMappedOrdersFromRecords(data);
 }
 
 export async function getOrderById(orderId) {

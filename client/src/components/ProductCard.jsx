@@ -1,6 +1,11 @@
+import { memo, useCallback } from "react";
 import { formatCurrency } from "../utils/formatCurrency";
 
-function ProductCard({ product, onAdd }) {
+const ProductCard = memo(function ProductCard({ product, onAdd }) {
+  const handleAdd = useCallback(() => {
+    onAdd(product);
+  }, [onAdd, product]);
+
   return (
     <article className="surface-card overflow-hidden p-0">
       <div className="bg-hero px-5 py-4 text-white">
@@ -25,7 +30,7 @@ function ProductCard({ product, onAdd }) {
 
           <button
             type="button"
-            onClick={() => onAdd(product)}
+            onClick={handleAdd}
             className="primary-button px-4 py-2.5"
           >
             Savatga
@@ -34,6 +39,6 @@ function ProductCard({ product, onAdd }) {
       </div>
     </article>
   );
-}
+});
 
 export default ProductCard;

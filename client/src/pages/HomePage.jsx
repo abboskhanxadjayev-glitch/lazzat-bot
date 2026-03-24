@@ -3,15 +3,17 @@ import { Link } from "react-router-dom";
 import { getCategories } from "../api/client";
 import CategoryCard from "../components/CategoryCard";
 import PageHeader from "../components/PageHeader";
-import { useCart } from "../context/CartContext";
+import { useCartState } from "../context/CartContext";
 import { highlights } from "../data/highlights";
 import { formatCurrency } from "../utils/formatCurrency";
 
 function HomePage() {
+  console.count("HomePage render");
+
   const [categories, setCategories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
-  const { totalItems, totalPrice } = useCart();
+  const { totalItems, totalPrice } = useCartState();
 
   useEffect(() => {
     let isMounted = true;

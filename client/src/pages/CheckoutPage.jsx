@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { createOrder } from "../api/client";
+import CheckoutForm from "../components/CheckoutForm";
 import LocationPicker from "../components/LocationPicker";
 import OrderSummary from "../components/OrderSummary";
 import PageHeader from "../components/PageHeader";
-import { useCart } from "../context/CartContext";
+import { useCartActions, useCartState } from "../context/CartContext";
 import { useTelegram } from "../hooks/useTelegram";
 import {
   RESTAURANT_LOCATION,
@@ -12,7 +13,6 @@ import {
   calculateDistanceKm,
   isValidLatitude,
   isValidLongitude,
-  parseCoordinate,
   roundDistanceKm
 } from "../utils/delivery";
 import { formatCurrency } from "../utils/formatCurrency";
@@ -22,16 +22,32 @@ function getInitialForm(displayName) {
     customerName: displayName === "Mehmon" ? "" : displayName,
     phone: "",
     address: "",
-    notes: "",
-    customerLat: "",
-    customerLng: ""
+    notes: ""
   };
 }
 
+function formatCoordinateDisplay(value) {
+  if (value === null || value === undefined || value === "") {
+    return "Noma'lum";
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(6) : "Noma'lum";
+}
+
+function formatDistanceDisplay(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${parsed.toFixed(2)} km` : "Noma'lum";
+}
+
 function CheckoutPage() {
-  const { cartItems, totalItems, totalPrice, clearCart } = useCart();
+  console.count("CheckoutPage render");
+
+  const { cartItems, totalItems, totalPrice } = useCartState();
+  const { clearCart } = useCartActions();
   const { user, displayName, webApp } = useTelegram();
   const [form, setForm] = useState(() => getInitialForm(displayName));
+  const [selectedLocation, setSelectedLocation] = useState(null);
   const [error, setError] = useState("");
   const [locationError, setLocationError] = useState("");
   const [orderResult, setOrderResult] = useState(null);
@@ -46,43 +62,49 @@ function CheckoutPage() {
     );
   }, [displayName]);
 
-  const parsedCustomerLat = parseCoordinate(form.customerLat);
-  const parsedCustomerLng = parseCoordinate(form.customerLng);
+  const restaurantOrigin = useMemo(() => RESTAURANT_LOCATION, []);
+  const customerLat = selectedLocation?.lat ?? null;
+  const customerLng = selectedLocation?.lng ?? null;
   const hasValidCoordinates =
-    isValidLatitude(parsedCustomerLat) && isValidLongitude(parsedCustomerLng);
-  const deliveryDistanceKm = hasValidCoordinates
-    ? roundDistanceKm(
-        calculateDistanceKm(RESTAURANT_LOCATION, {
-          latitude: parsedCustomerLat,
-          longitude: parsedCustomerLng
-        })
-      )
-    : null;
-  const deliveryFee = deliveryDistanceKm !== null ? calculateDeliveryFee(deliveryDistanceKm) : 0;
-  const totalAmount = totalPrice + deliveryFee;
+    isValidLatitude(customerLat) && isValidLongitude(customerLng);
+  const deliveryDistanceKm = useMemo(() => {
+    if (!hasValidCoordinates) {
+      return null;
+    }
+
+    return roundDistanceKm(
+      calculateDistanceKm(restaurantOrigin, {
+        latitude: customerLat,
+        longitude: customerLng
+      })
+    );
+  }, [customerLat, customerLng, hasValidCoordinates, restaurantOrigin]);
+  const deliveryFee = useMemo(
+    () => (deliveryDistanceKm !== null ? calculateDeliveryFee(deliveryDistanceKm) : 0),
+    [deliveryDistanceKm]
+  );
+  const totalAmount = useMemo(() => totalPrice + deliveryFee, [deliveryFee, totalPrice]);
   const isSubmitDisabled = isSubmitting || !hasValidCoordinates;
 
-  function handleChange(event) {
+  const handleFieldChange = useCallback((event) => {
     const { name, value } = event.target;
     setForm((currentForm) => ({ ...currentForm, [name]: value }));
-  }
+  }, []);
 
-  function handleAddressChange(event) {
-    handleChange(event);
-  }
+  const handleLocationSelect = useCallback(
+    (lat, lng) => {
+      setSelectedLocation({
+        lat: Number(lat.toFixed(6)),
+        lng: Number(lng.toFixed(6))
+      });
+      setLocationError("");
+      setError("");
+      webApp?.HapticFeedback?.impactOccurred?.("light");
+    },
+    [webApp]
+  );
 
-  function handleMapSelect({ latitude, longitude }) {
-    setForm((currentForm) => ({
-      ...currentForm,
-      customerLat: latitude.toFixed(6),
-      customerLng: longitude.toFixed(6)
-    }));
-    setLocationError("");
-    setError("");
-    webApp?.HapticFeedback?.impactOccurred?.("light");
-  }
-
-  function handleUseCurrentLocation() {
+  const handleUseCurrentLocation = useCallback(() => {
     setLocationError("");
     setError("");
 
@@ -95,10 +117,7 @@ function CheckoutPage() {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        handleMapSelect({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude
-        });
+        handleLocationSelect(position.coords.latitude, position.coords.longitude);
         setIsLocating(false);
       },
       () => {
@@ -111,14 +130,16 @@ function CheckoutPage() {
         maximumAge: 0
       }
     );
-  }
+  }, [handleLocationSelect]);
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
     setLocationError("");
 
-    if (!hasValidCoordinates || deliveryDistanceKm === null) {
+    const locationToSubmit = selectedLocation ? { ...selectedLocation } : null;
+
+    if (!locationToSubmit || !hasValidCoordinates || deliveryDistanceKm === null) {
       setError("Xaritadan manzilni tanlang");
       return;
     }
@@ -126,13 +147,13 @@ function CheckoutPage() {
     setIsSubmitting(true);
 
     try {
-      const order = await createOrder({
+      const payload = {
         customerName: form.customerName.trim(),
         phone: form.phone.trim(),
         address: form.address.trim(),
         notes: form.notes.trim(),
-        customerLat: parsedCustomerLat,
-        customerLng: parsedCustomerLng,
+        customerLat: locationToSubmit.lat,
+        customerLng: locationToSubmit.lng,
         deliveryDistanceKm,
         deliveryFee,
         totalAmount,
@@ -148,13 +169,25 @@ function CheckoutPage() {
               lastName: user.last_name || null
             }
           : null
-      });
+      };
 
-      setOrderResult(order);
-      clearCart();
+      console.log("Selected location:", locationToSubmit);
+      console.log("Final payload:", payload);
+
+      const order = await createOrder(payload);
+
+      if (!order?.id) {
+        throw new Error("Server busy, try again");
+      }
+
+      startTransition(() => {
+        setOrderResult(order);
+        clearCart();
+      });
       webApp?.HapticFeedback?.notificationOccurred?.("success");
     } catch (requestError) {
-      setError(requestError.message);
+      console.error("Order submit error", requestError);
+      setError(requestError?.message || "Buyurtmani yuborib bo'lmadi.");
       webApp?.HapticFeedback?.notificationOccurred?.("error");
     } finally {
       setIsSubmitting(false);
@@ -191,7 +224,7 @@ function CheckoutPage() {
             </div>
             <div className="flex items-center justify-between">
               <span>Masofa</span>
-              <span className="font-bold">{orderResult.deliveryDistanceKm.toFixed(2)} km</span>
+              <span className="font-bold">{formatDistanceDisplay(orderResult.deliveryDistanceKm)}</span>
             </div>
             <div className="flex items-center justify-between border-t border-lazzat-gold/20 pt-3 text-base font-extrabold text-lazzat-maroon">
               <span>Jami</span>
@@ -204,7 +237,7 @@ function CheckoutPage() {
           <p className="section-label">Yetkazib berish manzili</p>
           <p className="mt-2 text-base font-bold text-lazzat-maroon">{orderResult.address}</p>
           <p className="mt-2 text-sm leading-6 text-lazzat-ink/70">
-            Latitude: {orderResult.customerLat.toFixed(6)} | Longitude: {orderResult.customerLng.toFixed(6)}
+            Latitude: {formatCoordinateDisplay(orderResult.customerLat)} | Longitude: {formatCoordinateDisplay(orderResult.customerLng)}
           </p>
         </section>
 
@@ -250,65 +283,15 @@ function CheckoutPage() {
       />
 
       <form onSubmit={handleSubmit} className="space-y-5">
-        <section className="surface-card space-y-4">
-          <div>
-            <label htmlFor="customerName" className="mb-2 block text-sm font-bold text-lazzat-maroon">
-              Ism
-            </label>
-            <input
-              id="customerName"
-              name="customerName"
-              className="field-input"
-              placeholder="Masalan, Azizbek"
-              value={form.customerName}
-              onChange={handleChange}
-              required
-            />
-          </div>
-
-          <div>
-            <label htmlFor="phone" className="mb-2 block text-sm font-bold text-lazzat-maroon">
-              Telefon
-            </label>
-            <input
-              id="phone"
-              name="phone"
-              className="field-input"
-              placeholder="+998 90 123 45 67"
-              value={form.phone}
-              onChange={handleChange}
-              required
-            />
-          </div>
-        </section>
-
-        <section className="surface-card space-y-4">
-          <div>
-            <label htmlFor="address" className="mb-2 block text-sm font-bold text-lazzat-maroon">
-              Yetkazib berish manzili
-            </label>
-            <textarea
-              id="address"
-              name="address"
-              rows="3"
-              className="field-input resize-none"
-              placeholder="Mahalla, ko'cha, uy raqami va mo'ljal"
-              value={form.address}
-              onChange={handleAddressChange}
-              required
-            />
-          </div>
-        </section>
+        <CheckoutForm form={form} onFieldChange={handleFieldChange} />
 
         <LocationPicker
-          address={form.address}
-          customerLat={form.customerLat}
-          customerLng={form.customerLng}
-          onSelectLocation={handleMapSelect}
+          restaurantOrigin={restaurantOrigin}
+          selectedLocation={selectedLocation}
+          onLocationSelect={handleLocationSelect}
           onUseCurrentLocation={handleUseCurrentLocation}
           isLocating={isLocating}
           locationError={locationError}
-          hasValidCoordinates={hasValidCoordinates}
           distanceKm={deliveryDistanceKm ?? 0}
           deliveryFee={deliveryFee}
         />
@@ -325,9 +308,18 @@ function CheckoutPage() {
               className="field-input resize-none"
               placeholder="Qo'shimcha istaklar bo'lsa yozing"
               value={form.notes}
-              onChange={handleChange}
+              onChange={handleFieldChange}
             />
           </div>
+
+          {isSubmitting ? (
+            <div className="rounded-2xl border border-lazzat-gold/25 bg-lazzat-cream/70 px-4 py-3 text-sm text-lazzat-maroon">
+              <span className="inline-flex items-center gap-3 font-medium">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-lazzat-red/25 border-t-lazzat-red" />
+                Buyurtma yuborilmoqda...
+              </span>
+            </div>
+          ) : null}
 
           {!hasValidCoordinates ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -344,9 +336,17 @@ function CheckoutPage() {
           <button
             type="submit"
             disabled={isSubmitDisabled}
+            aria-busy={isSubmitting}
             className="primary-button w-full disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {isSubmitting ? "Yuborilmoqda..." : `Buyurtmani ${formatCurrency(totalAmount)} ga yuborish`}
+            {isSubmitting ? (
+              <span className="inline-flex items-center gap-3">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white" />
+                Yuborilmoqda...
+              </span>
+            ) : (
+              `Buyurtmani ${formatCurrency(totalAmount)} ga yuborish`
+            )}
           </button>
         </section>
       </form>

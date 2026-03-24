@@ -1,10 +1,7 @@
-import { useEffect } from "react";
+import { memo, useEffect, useMemo } from "react";
 import L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { formatCurrency } from "../utils/formatCurrency";
-import { RESTAURANT_LOCATION } from "../utils/delivery";
-
-const restaurantPosition = [RESTAURANT_LOCATION.latitude, RESTAURANT_LOCATION.longitude];
 
 const restaurantIcon = L.divIcon({
   className: "map-pin map-pin--restaurant",
@@ -23,7 +20,7 @@ const customerIcon = L.divIcon({
 });
 
 function formatCoordinateValue(value) {
-  if (value === "" || value === null || value === undefined) {
+  if (value === null || value === undefined) {
     return "Tanlanmagan";
   }
 
@@ -31,20 +28,17 @@ function formatCoordinateValue(value) {
   return Number.isFinite(parsed) ? parsed.toFixed(6) : "Tanlanmagan";
 }
 
-function MapClickHandler({ onSelectLocation }) {
+const MapClickHandler = memo(function MapClickHandler({ onLocationSelect }) {
   useMapEvents({
     click(event) {
-      onSelectLocation({
-        latitude: event.latlng.lat,
-        longitude: event.latlng.lng
-      });
+      onLocationSelect(event.latlng.lat, event.latlng.lng);
     }
   });
 
   return null;
-}
+});
 
-function MapViewport({ customerPosition }) {
+const MapViewport = memo(function MapViewport({ restaurantPosition, customerPosition }) {
   const map = useMap();
 
   useEffect(() => {
@@ -56,32 +50,42 @@ function MapViewport({ customerPosition }) {
       return;
     }
 
-    map.setView(restaurantPosition, 15);
-  }, [customerPosition, map]);
+    map.setView(restaurantPosition, 13);
+  }, [customerPosition, map, restaurantPosition]);
 
   return null;
-}
+});
 
-function LocationPicker({
-  address,
-  customerLat,
-  customerLng,
-  onSelectLocation,
+const LocationPicker = memo(function LocationPicker({
+  restaurantOrigin,
+  selectedLocation,
+  onLocationSelect,
   onUseCurrentLocation,
   isLocating,
   locationError,
-  hasValidCoordinates,
   distanceKm,
   deliveryFee
 }) {
+  console.count("LocationPicker render");
+
   useEffect(() => {
-    console.log("[LocationPicker] mounted");
+    console.log("LocationPicker mounted");
   }, []);
 
-  const customerPosition = hasValidCoordinates
-    ? [Number(customerLat), Number(customerLng)]
-    : null;
-  const selectedAddressText = address.trim() || "Matnli manzil hali kiritilmagan";
+  const restaurantPosition = useMemo(
+    () => [restaurantOrigin.latitude, restaurantOrigin.longitude],
+    [restaurantOrigin]
+  );
+  const customerPosition = useMemo(() => {
+    if (!selectedLocation) {
+      return null;
+    }
+
+    return [selectedLocation.lat, selectedLocation.lng];
+  }, [selectedLocation]);
+  const hasSelectedLocation = Boolean(customerPosition);
+  const mapWrapperStyle = useMemo(() => ({ height: "300px" }), []);
+  const mapStyle = useMemo(() => ({ height: "100%", width: "100%" }), []);
 
   return (
     <section className="surface-card space-y-4 bg-surface">
@@ -89,8 +93,8 @@ function LocationPicker({
         <p className="section-label">Joylashuv</p>
         <h3 className="mt-2 text-2xl font-bold text-lazzat-maroon">Xaritadan manzilni tanlang</h3>
         <p className="mt-2 text-sm leading-6 text-lazzat-ink/75">
-          Xaritaga bosing va mijoz nuqtasini tanlang. Yetkazib berish masofasi va narxi
-          shu nuqta bo'yicha avtomatik hisoblanadi.
+          Xarita doim ochiq turadi. Mijoz nuqtasini bossangiz marker tushadi va yetkazib
+          berish masofasi shu yangi restorandan hisoblanadi.
         </p>
       </div>
 
@@ -100,8 +104,8 @@ function LocationPicker({
             <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-lazzat-red/70">
               Restoran nuqtasi
             </p>
-            <p className="mt-2 text-lg font-bold text-lazzat-maroon">{RESTAURANT_LOCATION.name}</p>
-            <p className="mt-1 text-sm leading-6 text-lazzat-ink/70">{RESTAURANT_LOCATION.address}</p>
+            <p className="mt-2 text-lg font-bold text-lazzat-maroon">{restaurantOrigin.name}</p>
+            <p className="mt-1 text-sm leading-6 text-lazzat-ink/70">{restaurantOrigin.address}</p>
           </div>
           <button
             type="button"
@@ -115,27 +119,30 @@ function LocationPicker({
 
         <div
           className="checkout-map mt-4 overflow-hidden rounded-[26px] border border-white/70 bg-white shadow-sm"
-          style={{ height: "300px" }}
+          style={mapWrapperStyle}
         >
-          <div style={{ height: "300px" }}>
+          <div style={mapWrapperStyle}>
             <MapContainer
               center={restaurantPosition}
-              zoom={15}
+              zoom={13}
               scrollWheelZoom={false}
-              style={{ height: "300px", width: "100%" }}
+              style={mapStyle}
             >
               <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
-              <MapClickHandler onSelectLocation={onSelectLocation} />
-              <MapViewport customerPosition={customerPosition} />
+              <MapClickHandler onLocationSelect={onLocationSelect} />
+              <MapViewport
+                restaurantPosition={restaurantPosition}
+                customerPosition={customerPosition}
+              />
 
               <Marker position={restaurantPosition} icon={restaurantIcon}>
                 <Popup>
-                  <strong>{RESTAURANT_LOCATION.name}</strong>
+                  <strong>{restaurantOrigin.name}</strong>
                   <br />
-                  {RESTAURANT_LOCATION.address}
+                  {restaurantOrigin.address}
                 </Popup>
               </Marker>
 
@@ -144,9 +151,9 @@ function LocationPicker({
                   <Popup>
                     <strong>Tanlangan manzil</strong>
                     <br />
-                    Latitude: {Number(customerLat).toFixed(6)}
+                    Latitude: {selectedLocation.lat.toFixed(6)}
                     <br />
-                    Longitude: {Number(customerLng).toFixed(6)}
+                    Longitude: {selectedLocation.lng.toFixed(6)}
                   </Popup>
                 </Marker>
               ) : null}
@@ -160,7 +167,7 @@ function LocationPicker({
               <span className="inline-flex h-3 w-3 rounded-full bg-lazzat-maroon" />
               <span className="font-bold text-lazzat-maroon">Lazzat Oshxonasi</span>
             </div>
-            <p className="mt-2 leading-6">Restoran nuqtasi xaritada doim ko'rinadi.</p>
+            <p className="mt-2 leading-6">Yangi restoran markeri xaritada doim ko'rinadi.</p>
           </div>
           <div className="rounded-[20px] bg-white/80 px-4 py-3 text-lazzat-ink/75">
             <div className="flex items-center gap-2">
@@ -168,7 +175,7 @@ function LocationPicker({
               <span className="font-bold text-lazzat-maroon">Mijoz manzili</span>
             </div>
             <p className="mt-2 leading-6">
-              {hasValidCoordinates
+              {hasSelectedLocation
                 ? "Nuqta tanlandi. Xaritada boshqa joyni bossangiz marker ko'chadi."
                 : "Tanlash uchun xaritada bir nuqtani bosing."}
             </p>
@@ -177,21 +184,24 @@ function LocationPicker({
       </div>
 
       <div className="rounded-[24px] border border-lazzat-gold/20 bg-white/85 p-4">
-        <p className="section-label">Tanlangan manzil</p>
-        <p className="mt-2 text-base font-bold text-lazzat-maroon">{selectedAddressText}</p>
+        <p className="section-label">Tanlangan koordinatalar</p>
 
         <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
           <div className="rounded-[20px] bg-lazzat-cream/80 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.18em] text-lazzat-red/60">Latitude</p>
-            <p className="mt-2 font-bold text-lazzat-maroon">{formatCoordinateValue(customerLat)}</p>
+            <p className="mt-2 font-bold text-lazzat-maroon">
+              {formatCoordinateValue(selectedLocation?.lat ?? null)}
+            </p>
           </div>
           <div className="rounded-[20px] bg-lazzat-cream/80 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.18em] text-lazzat-red/60">Longitude</p>
-            <p className="mt-2 font-bold text-lazzat-maroon">{formatCoordinateValue(customerLng)}</p>
+            <p className="mt-2 font-bold text-lazzat-maroon">
+              {formatCoordinateValue(selectedLocation?.lng ?? null)}
+            </p>
           </div>
         </div>
 
-        {hasValidCoordinates ? (
+        {hasSelectedLocation ? (
           <div className="mt-4 flex items-center justify-between rounded-[22px] bg-lazzat-maroon px-4 py-4 text-white">
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-white/65">Masofa</p>
@@ -214,6 +224,6 @@ function LocationPicker({
       ) : null}
     </section>
   );
-}
+});
 
 export default LocationPicker;

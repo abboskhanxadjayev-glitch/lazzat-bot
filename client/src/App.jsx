@@ -1,13 +1,29 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import AdminLayout from "./layouts/AdminLayout";
 import MiniAppLayout from "./layouts/MiniAppLayout";
 import CartPage from "./pages/CartPage";
 import CheckoutPage from "./pages/CheckoutPage";
 import HomePage from "./pages/HomePage";
+import AdminOrdersPage from "./pages/AdminOrdersPage";
 import ProductsPage from "./pages/ProductsPage";
 
-function App() {
+function AppRoutes() {
+  const location = useLocation();
+
+  console.count("AppRoutes render");
+
+  useEffect(() => {
+    console.log("[route] transition", location.pathname);
+  }, [location.pathname]);
+
   return (
     <Routes>
+      <Route path="/admin" element={<AdminLayout />}>
+        <Route path="orders" element={<AdminOrdersPage />} />
+        <Route path="*" element={<Navigate replace to="/admin/orders" />} />
+      </Route>
+
       <Route path="/" element={<MiniAppLayout />}>
         <Route index element={<HomePage />} />
         <Route path="categories/:categorySlug" element={<ProductsPage />} />
@@ -17,6 +33,10 @@ function App() {
       </Route>
     </Routes>
   );
+}
+
+function App() {
+  return <AppRoutes />;
 }
 
 export default App;

@@ -3,6 +3,7 @@ import { supabase } from "../config/supabase.js";
 import { createAppError } from "../utils/appError.js";
 import { getDeliveryDetails } from "../utils/delivery.js";
 import { getProductsByIds } from "./catalogService.js";
+import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
 import { sendOrderNotification } from "./telegramService.js";
 
 function ensureSupabaseReady() {
@@ -191,10 +192,29 @@ async function getOrderRecordById(orderId) {
     .from("orders")
     .select("id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload")
     .eq("id", orderId)
-    .single();
+    .maybeSingle();
 
   if (error) {
     throw createAppError(500, "Buyurtma tafsilotlarini yuklab bo'lmadi.", error);
+  }
+
+  if (!data) {
+    throw createAppError(404, "Buyurtma topilmadi.", { orderId });
+  }
+
+  return data;
+}
+
+async function updateOrderRecordStatus(orderId, status) {
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ status })
+    .eq("id", orderId)
+    .select("id, status")
+    .maybeSingle();
+
+  if (error) {
+    throw createAppError(500, "Buyurtma statusini yangilab bo'lmadi.", error);
   }
 
   if (!data) {
@@ -297,7 +317,7 @@ export async function getOrders() {
     .from("orders")
     .select("id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload")
     .order("created_at", { ascending: false })
-    .limit(20);
+    .limit(100);
 
   if (error) {
     throw createAppError(500, "Buyurtmalarni yuklab bo'lmadi.", error);
@@ -316,4 +336,25 @@ export async function getOrderById(orderId) {
   const itemsByOrderId = await getOrderItemsByOrderIds([orderId]);
 
   return mapOrderRecord(orderRecord, itemsByOrderId.get(orderId) || []);
+}
+
+export async function updateOrderStatus(orderId, status) {
+  ensureSupabaseReady();
+
+  await getOrderRecordById(orderId);
+  await updateOrderRecordStatus(orderId, status);
+
+  const updatedOrder = await getOrderById(orderId);
+
+  try {
+    await notifyOperatorStatusChanged({
+      orderId,
+      status,
+      order: updatedOrder
+    });
+  } catch (notificationError) {
+    console.error("[operator-notifications] status hook failed", notificationError);
+  }
+
+  return updatedOrder;
 }

@@ -1,6 +1,14 @@
 import { z } from "zod";
 
 const phonePattern = /^[+]?[-()\d\s]{7,20}$/;
+export const ORDER_STATUS_VALUES = [
+  "pending",
+  "accepted",
+  "preparing",
+  "on_the_way",
+  "delivered",
+  "cancelled"
+];
 
 export const createOrderSchema = z
   .object({
@@ -43,3 +51,11 @@ export const createOrderSchema = z
       });
     }
   });
+
+export const updateOrderStatusSchema = z.object({
+  status: z.enum(ORDER_STATUS_VALUES, {
+    errorMap: () => ({
+      message: "Status noto'g'ri. Ruxsat etilgan statuslardan birini tanlang."
+    })
+  })
+});

@@ -3,15 +3,38 @@ import app from "./app.js";
 import { env } from "./config/env.js";
 import { verifySupabaseConnection } from "./config/supabase.js";
 import { logTelegramConfiguration } from "./services/telegramService.js";
+import {
+  registerTelegramBotWebhook,
+  syncTelegramBotWebhook
+} from "./services/telegramBotWebhookService.js";
 
-app.listen(env.port, async () => {
-  console.log(`Lazzat API listening on http://localhost:${env.port}`);
+async function startServer() {
+  await registerTelegramBotWebhook(app);
 
-  const supabaseStatus = await verifySupabaseConnection();
+  app.listen(env.port, async () => {
+    console.log(`Lazzat API listening on http://localhost:${env.port}`);
 
-  if (!supabaseStatus.ok) {
-    console.warn(`[supabase] order persistence unavailable: ${supabaseStatus.reason}`);
-  }
+    const supabaseStatus = await verifySupabaseConnection();
 
-  logTelegramConfiguration();
+    if (!supabaseStatus.ok) {
+      console.warn(`[supabase] order persistence unavailable: ${supabaseStatus.reason}`);
+    }
+
+    logTelegramConfiguration();
+
+    try {
+      const webhookStatus = await syncTelegramBotWebhook();
+
+      if (!webhookStatus.enabled) {
+        console.warn(`[telegram-bot] webhook inactive: ${webhookStatus.reason}`);
+      }
+    } catch (error) {
+      console.error("[telegram-bot] webhook sync failed", error);
+    }
+  });
+}
+
+startServer().catch((error) => {
+  console.error("API serverni ishga tushirib bo'lmadi:", error);
+  process.exit(1);
 });

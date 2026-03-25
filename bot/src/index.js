@@ -10,6 +10,7 @@ import {
   updateCourierProfile
 } from "./api.js";
 
+const DEFAULT_MINI_APP_URL = "https://client-chi-nine-98.vercel.app";
 const ORDER_BUTTON_LABEL = "\u{1F354} Buyurtma berish";
 const COURIER_BUTTON_LABEL = "\u{1F69A} Kuryer bo'lish";
 const OPEN_COURIER_PANEL_LABEL = "\u{1F69A} Courier panelni ochish";
@@ -19,11 +20,6 @@ const SHARE_CONTACT_LABEL = "\u{1F4F1} Telefonni ulashish";
 const CANCEL_BUTTON_LABEL = "\u2B05 Bekor qilish";
 const PHONE_PATTERN = /^[+]?[-()\d\s]{7,20}$/;
 const RESERVED_TEXT_BUTTONS = new Set([COURIER_BUTTON_LABEL, ONLINE_BUTTON_LABEL, OFFLINE_BUTTON_LABEL, CANCEL_BUTTON_LABEL]);
-
-const token = process.env.BOT_TOKEN;
-const miniAppUrl = process.env.MINI_APP_URL || "https://client-chi-nine-98.vercel.app";
-const normalizedMiniAppUrl = miniAppUrl.replace(/\/+$/, "");
-const courierMiniAppUrl = `${normalizedMiniAppUrl}/courier`;
 const onboardingState = new Map();
 
 const TRANSPORT_OPTIONS = [
@@ -51,9 +47,24 @@ const ONLINE_STATUS_LABELS = {
   offline: "Offline"
 };
 
-if (!token) {
-  console.error("BOT_TOKEN topilmadi. bot/.env faylini to'ldiring.");
-  process.exit(1);
+const BOT_COMMANDS = [
+  { command: "start", description: "Asosiy menyuni ochish" },
+  { command: "menu", description: "Menyuni ko'rsatish" },
+  { command: "help", description: "Yordam va tugmalar" },
+  { command: "courier", description: "Kuryer onboardingini boshlash" },
+  { command: "myid", description: "Telegram ID va kuryer holati" }
+];
+
+function resolveBotConfig(options = {}) {
+  const token = options.token || process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "";
+  const miniAppUrl = options.miniAppUrl || process.env.MINI_APP_URL || DEFAULT_MINI_APP_URL;
+  const normalizedMiniAppUrl = miniAppUrl.replace(/\/+$/, "");
+
+  return {
+    token,
+    normalizedMiniAppUrl,
+    courierMiniAppUrl: `${normalizedMiniAppUrl}/courier`
+  };
 }
 
 function mapTelegramUser(user) {
@@ -69,15 +80,6 @@ function mapTelegramUser(user) {
   };
 }
 
-function getDisplayName(user) {
-  const parts = [user?.first_name, user?.last_name].filter(Boolean);
-  if (parts.length) {
-    return parts.join(" ");
-  }
-
-  return user?.username ? `@${user.username}` : "Kuryer";
-}
-
 function formatTransportType(value) {
   return TRANSPORT_LABELS[value] || "Kiritilmagan";
 }
@@ -90,21 +92,21 @@ function formatOnlineStatus(value) {
   return ONLINE_STATUS_LABELS[value] || value || "Offline";
 }
 
-function mainKeyboard() {
+function getMainKeyboard(config) {
   return Markup.keyboard([
-    [Markup.button.webApp(ORDER_BUTTON_LABEL, normalizedMiniAppUrl)],
+    [Markup.button.webApp(ORDER_BUTTON_LABEL, config.normalizedMiniAppUrl)],
     [Markup.button.text(COURIER_BUTTON_LABEL)]
   ]).resize();
 }
 
-function phoneKeyboard() {
+function getPhoneKeyboard() {
   return Markup.keyboard([
     [Markup.button.contactRequest(SHARE_CONTACT_LABEL)],
     [Markup.button.text(CANCEL_BUTTON_LABEL)]
   ]).resize().oneTime();
 }
 
-function transportKeyboard() {
+function getTransportKeyboard() {
   return Markup.keyboard([
     TRANSPORT_OPTIONS.slice(0, 2).map((option) => Markup.button.text(option.label)),
     TRANSPORT_OPTIONS.slice(2, 4).map((option) => Markup.button.text(option.label)),
@@ -112,13 +114,13 @@ function transportKeyboard() {
   ]).resize().oneTime();
 }
 
-function courierPanelKeyboard(courier) {
+function getCourierPanelKeyboard(courier, config) {
   const toggleButtons = courier?.status === "approved"
     ? [Markup.button.text(ONLINE_BUTTON_LABEL), Markup.button.text(OFFLINE_BUTTON_LABEL)]
     : [];
 
   const rows = [
-    [Markup.button.webApp(OPEN_COURIER_PANEL_LABEL, courierMiniAppUrl)]
+    [Markup.button.webApp(OPEN_COURIER_PANEL_LABEL, config.courierMiniAppUrl)]
   ];
 
   if (toggleButtons.length) {
@@ -126,7 +128,7 @@ function courierPanelKeyboard(courier) {
   }
 
   rows.push([
-    Markup.button.webApp(ORDER_BUTTON_LABEL, normalizedMiniAppUrl),
+    Markup.button.webApp(ORDER_BUTTON_LABEL, config.normalizedMiniAppUrl),
     Markup.button.text(COURIER_BUTTON_LABEL)
   ]);
 
@@ -195,6 +197,16 @@ function getApiErrorMessage(error, fallbackMessage) {
   return error?.message || fallbackMessage;
 }
 
+function getHelpText() {
+  return [
+    "Lazzat Oshxonasi boti.",
+    "",
+    "\u2022 Buyurtma berish uchun: 🍔 Buyurtma berish",
+    "\u2022 Kuryer onboardingi uchun: 🚚 Kuryer bo'lish",
+    "\u2022 Telegram ID ni ko'rish uchun: /myid"
+  ].join("\n");
+}
+
 async function getOrCreateCourier(ctx) {
   const telegramUser = mapTelegramUser(ctx.from);
 
@@ -213,12 +225,12 @@ async function loadCourierProfile(ctx) {
   return getCourierProfile(ctx.from.id);
 }
 
-async function sendCourierEntryState(ctx, courier, options = {}) {
+async function sendCourierEntryState(ctx, courier, config, options = {}) {
   const { messagePrefix = "" } = options;
   const userId = ctx.from?.id;
 
   if (!userId) {
-    await ctx.reply("Telegram foydalanuvchi ma'lumotlari topilmadi.", mainKeyboard());
+    await ctx.reply("Telegram foydalanuvchi ma'lumotlari topilmadi.", getMainKeyboard(config));
     return;
   }
 
@@ -228,7 +240,7 @@ async function sendCourierEntryState(ctx, courier, options = {}) {
     setOnboardingState(userId, "phone", courier.id);
     await ctx.reply(
       `${messagePrefix}Kuryer bo'lib ro'yxatdan o'tish uchun telefon raqamingizni yuboring yoki tugma orqali ulashing.`,
-      phoneKeyboard()
+      getPhoneKeyboard()
     );
     return;
   }
@@ -237,7 +249,7 @@ async function sendCourierEntryState(ctx, courier, options = {}) {
     setOnboardingState(userId, "transport", courier.id);
     await ctx.reply(
       `${messagePrefix}Transport turini tanlang.`,
-      transportKeyboard()
+      getTransportKeyboard()
     );
     return;
   }
@@ -247,7 +259,7 @@ async function sendCourierEntryState(ctx, courier, options = {}) {
   if (step === "blocked") {
     await ctx.reply(
       `${messagePrefix}Kuryer profilingiz bloklangan. Operator bilan bog'laning.`,
-      mainKeyboard()
+      getMainKeyboard(config)
     );
     return;
   }
@@ -255,28 +267,28 @@ async function sendCourierEntryState(ctx, courier, options = {}) {
   if (step === "approved") {
     await ctx.reply(
       `${messagePrefix}Siz tasdiqlangan kuryersiz.\n\n${buildCourierSummary(courier)}`,
-      courierPanelKeyboard(courier)
+      getCourierPanelKeyboard(courier, config)
     );
     return;
   }
 
   await ctx.reply(
     `${messagePrefix}Tasdiqlash kutilmoqda. Admin tasdiqlagach courier paneldan foydalanishingiz mumkin.\n\n${buildCourierSummary(courier)}`,
-    courierPanelKeyboard(courier)
+    getCourierPanelKeyboard(courier, config)
   );
 }
 
-async function handleCourierEntry(ctx) {
+async function handleCourierEntry(ctx, config) {
   try {
     const courier = await getOrCreateCourier(ctx);
-    await sendCourierEntryState(ctx, courier);
+    await sendCourierEntryState(ctx, courier, config);
   } catch (error) {
     console.error("[bot] courier entry error", error);
-    await ctx.reply(getApiErrorMessage(error, "Kuryer onboardingini boshlashda xatolik yuz berdi."), mainKeyboard());
+    await ctx.reply(getApiErrorMessage(error, "Kuryer onboardingini boshlashda xatolik yuz berdi."), getMainKeyboard(config));
   }
 }
 
-async function handlePhoneCapture(ctx, phoneNumber) {
+async function handlePhoneCapture(ctx, phoneNumber, config) {
   const userId = ctx.from?.id;
 
   if (!userId) {
@@ -292,7 +304,7 @@ async function handlePhoneCapture(ctx, phoneNumber) {
   const normalizedPhone = phoneNumber.trim();
 
   if (!PHONE_PATTERN.test(normalizedPhone)) {
-    await ctx.reply("Telefon raqamini to'g'ri formatda yuboring. Masalan: +998 90 123 45 67", phoneKeyboard());
+    await ctx.reply("Telefon raqamini to'g'ri formatda yuboring. Masalan: +998 90 123 45 67", getPhoneKeyboard());
     return;
   }
 
@@ -301,14 +313,14 @@ async function handlePhoneCapture(ctx, phoneNumber) {
       phone: normalizedPhone
     });
     setOnboardingState(userId, "transport", updatedCourier.id);
-    await ctx.reply("Rahmat. Endi transport turini tanlang.", transportKeyboard());
+    await ctx.reply("Rahmat. Endi transport turini tanlang.", getTransportKeyboard());
   } catch (error) {
     console.error("[bot] phone capture error", error);
-    await ctx.reply(getApiErrorMessage(error, "Telefonni saqlab bo'lmadi."), mainKeyboard());
+    await ctx.reply(getApiErrorMessage(error, "Telefonni saqlab bo'lmadi."), getMainKeyboard(config));
   }
 }
 
-async function handleTransportSelection(ctx, transportType) {
+async function handleTransportSelection(ctx, transportType, config) {
   const userId = ctx.from?.id;
 
   if (!userId) {
@@ -330,20 +342,20 @@ async function handleTransportSelection(ctx, transportType) {
     clearOnboardingState(userId);
     await ctx.reply(
       `Ro'yxatdan o'tish yakunlandi. Admin tasdiqlashi kerak.\n\n${buildCourierSummary(updatedCourier)}`,
-      courierPanelKeyboard(updatedCourier)
+      getCourierPanelKeyboard(updatedCourier, config)
     );
   } catch (error) {
     console.error("[bot] transport selection error", error);
-    await ctx.reply(getApiErrorMessage(error, "Transport turini saqlab bo'lmadi."), mainKeyboard());
+    await ctx.reply(getApiErrorMessage(error, "Transport turini saqlab bo'lmadi."), getMainKeyboard(config));
   }
 }
 
-async function handleOnlineToggle(ctx, onlineStatus) {
+async function handleOnlineToggle(ctx, onlineStatus, config) {
   try {
     const courier = await loadCourierProfile(ctx);
 
     if (!courier) {
-      await ctx.reply("Avval kuryer sifatida ro'yxatdan o'ting.", mainKeyboard());
+      await ctx.reply("Avval kuryer sifatida ro'yxatdan o'ting.", getMainKeyboard(config));
       return;
     }
 
@@ -352,33 +364,63 @@ async function handleOnlineToggle(ctx, onlineStatus) {
       ? "Siz online holatga o'tdingiz."
       : "Siz offline holatga o'tdingiz.";
 
-    await ctx.reply(`${messageText}\n\n${buildCourierSummary(updatedCourier)}`, courierPanelKeyboard(updatedCourier));
+    await ctx.reply(`${messageText}\n\n${buildCourierSummary(updatedCourier)}`, getCourierPanelKeyboard(updatedCourier, config));
   } catch (error) {
     console.error("[bot] online toggle error", error);
-    await ctx.reply(getApiErrorMessage(error, "Online holatini yangilab bo'lmadi."), mainKeyboard());
+    await ctx.reply(getApiErrorMessage(error, "Online holatini yangilab bo'lmadi."), getMainKeyboard(config));
   }
 }
 
-export function createBot() {
-  const bot = new Telegraf(token);
+export async function syncBotConfiguration(bot) {
+  const config = bot.__lazzatConfig || resolveBotConfig();
+
+  await bot.telegram.setMyCommands(BOT_COMMANDS);
+  await bot.telegram.setChatMenuButton({
+    menuButton: {
+      type: "web_app",
+      text: ORDER_BUTTON_LABEL,
+      web_app: {
+        url: config.normalizedMiniAppUrl
+      }
+    }
+  });
+}
+
+export function createBot(options = {}) {
+  const config = resolveBotConfig(options);
+
+  if (!config.token) {
+    throw new Error("BOT_TOKEN yoki TELEGRAM_BOT_TOKEN topilmadi.");
+  }
+
+  const bot = new Telegraf(config.token);
+  bot.__lazzatConfig = config;
 
   bot.start(async (ctx) => {
     clearOnboardingState(ctx.from?.id);
     await ctx.reply(
       "Lazzat Oshxonasi botiga xush kelibsiz. Buyurtma berish yoki kuryer sifatida ro'yxatdan o'tish uchun quyidagi tugmalardan foydalaning.",
-      mainKeyboard()
+      getMainKeyboard(config)
     );
   });
 
   bot.command("menu", async (ctx) => {
-    await ctx.reply("Buyurtma berish uchun quyidagi tugmani bosing.", mainKeyboard());
+    await ctx.reply("Buyurtma berish uchun quyidagi tugmani bosing.", getMainKeyboard(config));
   });
 
-  bot.command("courier", handleCourierEntry);
+  bot.command("help", async (ctx) => {
+    await ctx.reply(getHelpText(), getMainKeyboard(config));
+  });
+
+  bot.command("cart", async (ctx) => {
+    await ctx.reply("Savatcha va buyurtma uchun Mini Appni oching.", getMainKeyboard(config));
+  });
+
+  bot.command("courier", async (ctx) => handleCourierEntry(ctx, config));
 
   bot.command("myid", async (ctx) => {
     if (!ctx.from?.id) {
-      await ctx.reply("Telegram foydalanuvchi ma'lumotlari topilmadi.", mainKeyboard());
+      await ctx.reply("Telegram foydalanuvchi ma'lumotlari topilmadi.", getMainKeyboard(config));
       return;
     }
 
@@ -392,19 +434,19 @@ export function createBot() {
         lines.push("Courier profili topilmadi.");
       }
 
-      await ctx.reply(lines.join("\n\n"), mainKeyboard());
+      await ctx.reply(lines.join("\n\n"), getMainKeyboard(config));
     } catch (error) {
       console.error("[bot] myid error", error);
-      await ctx.reply(getApiErrorMessage(error, "Telegram ID ni tekshirib bo'lmadi."), mainKeyboard());
+      await ctx.reply(getApiErrorMessage(error, "Telegram ID ni tekshirib bo'lmadi."), getMainKeyboard(config));
     }
   });
 
-  bot.hears(COURIER_BUTTON_LABEL, handleCourierEntry);
-  bot.hears(ONLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "online"));
-  bot.hears(OFFLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "offline"));
+  bot.hears(COURIER_BUTTON_LABEL, async (ctx) => handleCourierEntry(ctx, config));
+  bot.hears(ONLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "online", config));
+  bot.hears(OFFLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "offline", config));
   bot.hears(CANCEL_BUTTON_LABEL, async (ctx) => {
     clearOnboardingState(ctx.from?.id);
-    await ctx.reply("Kuryer onboardingi bekor qilindi.", mainKeyboard());
+    await ctx.reply("Kuryer onboardingi bekor qilindi.", getMainKeyboard(config));
   });
 
   bot.on(message("contact"), async (ctx) => {
@@ -414,7 +456,7 @@ export function createBot() {
       return;
     }
 
-    await handlePhoneCapture(ctx, ctx.message.contact.phone_number || "");
+    await handlePhoneCapture(ctx, ctx.message.contact.phone_number || "", config);
   });
 
   bot.on(message("text"), async (ctx) => {
@@ -426,7 +468,7 @@ export function createBot() {
     }
 
     if (state.step === "phone") {
-      await handlePhoneCapture(ctx, text);
+      await handlePhoneCapture(ctx, text, config);
       return;
     }
 
@@ -434,11 +476,11 @@ export function createBot() {
       const selectedTransport = TRANSPORT_OPTIONS.find((option) => option.label === text);
 
       if (!selectedTransport) {
-        await ctx.reply("Transport turini tugmalar orqali tanlang.", transportKeyboard());
+        await ctx.reply("Transport turini tugmalar orqali tanlang.", getTransportKeyboard());
         return;
       }
 
-      await handleTransportSelection(ctx, selectedTransport.value);
+      await handleTransportSelection(ctx, selectedTransport.value, config);
     }
   });
 
@@ -451,21 +493,15 @@ export function createBot() {
 
 let runningBot = null;
 
-export async function startBot() {
-  const bot = createBot();
-
-  await bot.telegram.setMyCommands([
-    { command: "start", description: "Bot menyusini ochish" },
-    { command: "menu", description: "Buyurtma tugmalarini ko'rsatish" },
-    { command: "courier", description: "Kuryer onboardingini boshlash" },
-    { command: "myid", description: "Telegram ID va courier status" }
-  ]);
-
+export async function startBot(options = {}) {
+  const bot = createBot(options);
+  await syncBotConfiguration(bot);
   await bot.launch();
   runningBot = bot;
 
-  console.log(`Lazzat bot ishga tushdi. Mini App URL: ${normalizedMiniAppUrl}`);
-  console.log(`Courier panel URL: ${courierMiniAppUrl}`);
+  const config = bot.__lazzatConfig;
+  console.log(`Lazzat bot ishga tushdi. Mini App URL: ${config.normalizedMiniAppUrl}`);
+  console.log(`Courier panel URL: ${config.courierMiniAppUrl}`);
   console.log(`Courier API URL: ${API_BASE_URL}`);
 
   return bot;
@@ -482,6 +518,3 @@ if (isMainModule) {
   process.once("SIGINT", () => runningBot?.stop("SIGINT"));
   process.once("SIGTERM", () => runningBot?.stop("SIGTERM"));
 }
-
-
-

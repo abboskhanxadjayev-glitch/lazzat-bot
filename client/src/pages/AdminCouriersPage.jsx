@@ -22,6 +22,23 @@ const STATUS_LABELS = {
   blocked: "Bloklangan"
 };
 
+const TRANSPORT_LABELS = {
+  foot: "Piyoda",
+  bike: "Velik",
+  moto: "Moto",
+  car: "Avto"
+};
+
+const ONLINE_STATUS_LABELS = {
+  online: "Online",
+  offline: "Offline"
+};
+
+const ONLINE_STATUS_STYLES = {
+  online: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  offline: "bg-slate-100 text-slate-700 border-slate-200"
+};
+
 function formatDate(value) {
   if (!value) {
     return "-";
@@ -33,10 +50,26 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
+function formatTransportType(value) {
+  return TRANSPORT_LABELS[value] || "Kiritilmagan";
+}
+
 function CourierStatusBadge({ status }) {
   const normalizedStatus = status || "pending";
   const style = STATUS_BADGE_STYLES[normalizedStatus] || STATUS_BADGE_STYLES.pending;
   const label = STATUS_LABELS[normalizedStatus] || normalizedStatus;
+
+  return (
+    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.14em] ${style}`}>
+      {label}
+    </span>
+  );
+}
+
+function CourierOnlineBadge({ onlineStatus }) {
+  const normalizedStatus = onlineStatus || "offline";
+  const style = ONLINE_STATUS_STYLES[normalizedStatus] || ONLINE_STATUS_STYLES.offline;
+  const label = ONLINE_STATUS_LABELS[normalizedStatus] || normalizedStatus;
 
   return (
     <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.14em] ${style}`}>
@@ -79,7 +112,13 @@ function AdminCouriersPage() {
         return true;
       }
 
-      const haystack = [courier.fullName, courier.username, courier.phone]
+      const haystack = [
+        courier.fullName,
+        courier.username,
+        courier.phone,
+        formatTransportType(courier.transportType),
+        ONLINE_STATUS_LABELS[courier.onlineStatus] || courier.onlineStatus
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -108,7 +147,8 @@ function AdminCouriersPage() {
     total: couriers.length,
     pending: couriers.filter((courier) => courier.status === "pending").length,
     approved: couriers.filter((courier) => courier.status === "approved").length,
-    blocked: couriers.filter((courier) => courier.status === "blocked").length
+    blocked: couriers.filter((courier) => courier.status === "blocked").length,
+    online: couriers.filter((courier) => courier.onlineStatus === "online").length
   }), [couriers]);
 
   const handleStatusChange = useCallback(async (courierId, status) => {
@@ -155,7 +195,7 @@ function AdminCouriersPage() {
         <LiveFeedStatus liveMode={liveMode} lastUpdatedAt={lastUpdatedAt} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <div className="surface-card rounded-[28px] p-5">
           <p className="section-label">Jami kuryer</p>
           <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.total}</p>
@@ -171,6 +211,10 @@ function AdminCouriersPage() {
         <div className="surface-card rounded-[28px] p-5">
           <p className="section-label">Bloklangan</p>
           <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.blocked}</p>
+        </div>
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">Online</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.online}</p>
         </div>
       </div>
 
@@ -192,7 +236,7 @@ function AdminCouriersPage() {
                   type="search"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Ism, username yoki telefon"
+                  placeholder="Ism, username, telefon yoki transport"
                   className="field-input"
                 />
               </label>
@@ -250,10 +294,16 @@ function AdminCouriersPage() {
                         <h3 className="mt-2 text-lg font-bold text-lazzat-maroon">{courier.fullName}</h3>
                         <p className="mt-1 text-sm text-lazzat-ink/70">{courier.phone || "Telefon yo'q"}</p>
                       </div>
-                      <CourierStatusBadge status={courier.status} />
+                      <div className="flex flex-col items-end gap-2">
+                        <CourierStatusBadge status={courier.status} />
+                        <CourierOnlineBadge onlineStatus={courier.onlineStatus} />
+                      </div>
                     </div>
                     <p className="mt-3 text-sm text-lazzat-ink/65">
                       {courier.username ? `@${courier.username}` : "Username yo'q"}
+                    </p>
+                    <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-lazzat-red/60">
+                      Transport: {formatTransportType(courier.transportType)}
                     </p>
                   </button>
                 );
@@ -286,7 +336,10 @@ function AdminCouriersPage() {
                     Telegram ID: {selectedCourier.telegramUserId}
                   </p>
                 </div>
-                <CourierStatusBadge status={selectedCourier.status} />
+                <div className="flex flex-col items-start gap-2 sm:items-end">
+                  <CourierStatusBadge status={selectedCourier.status} />
+                  <CourierOnlineBadge onlineStatus={selectedCourier.onlineStatus} />
+                </div>
               </div>
 
               <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -297,6 +350,12 @@ function AdminCouriersPage() {
                   <p className="mt-2">
                     <span className="font-bold text-lazzat-maroon">Faol holat:</span> {selectedCourier.isActive ? "Faol" : "Faol emas"}
                   </p>
+                  <p className="mt-2">
+                    <span className="font-bold text-lazzat-maroon">Transport:</span> {formatTransportType(selectedCourier.transportType)}
+                  </p>
+                  <p className="mt-2">
+                    <span className="font-bold text-lazzat-maroon">Profil to'liq:</span> {selectedCourier.isProfileComplete ? "Ha" : "Yo'q"}
+                  </p>
                 </div>
 
                 <div className="rounded-[24px] border border-lazzat-gold/15 bg-lazzat-cream/70 p-4 text-sm text-lazzat-ink/75">
@@ -305,6 +364,9 @@ function AdminCouriersPage() {
                   </p>
                   <p className="mt-2">
                     <span className="font-bold text-lazzat-maroon">Oxirgi yangilanish:</span> {formatDate(selectedCourier.updatedAt)}
+                  </p>
+                  <p className="mt-2">
+                    <span className="font-bold text-lazzat-maroon">Online:</span> {ONLINE_STATUS_LABELS[selectedCourier.onlineStatus] || selectedCourier.onlineStatus}
                   </p>
                 </div>
               </div>
@@ -351,4 +413,3 @@ function AdminCouriersPage() {
 }
 
 export default AdminCouriersPage;
-

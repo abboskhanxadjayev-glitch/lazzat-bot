@@ -9,6 +9,12 @@ let courierSchemaCache = {
   reason: ""
 };
 
+let courierProfileSchemaCache = {
+  ready: null,
+  checkedAt: 0,
+  reason: ""
+};
+
 export const COURIER_SCHEMA_DETAILS = {
   code: "COURIER_SCHEMA_NOT_READY",
   migrationFile: "server/supabase/migrations/20260325_add_courier_assignment.sql",
@@ -17,8 +23,16 @@ export const COURIER_SCHEMA_DETAILS = {
   requiredColumns: ["public.orders.courier_id", "public.orders.assigned_at"]
 };
 
-function isSchemaCacheFresh() {
-  return Date.now() - courierSchemaCache.checkedAt < SCHEMA_CACHE_TTL_MS;
+export const COURIER_PROFILE_SCHEMA_DETAILS = {
+  code: "COURIER_PROFILE_SCHEMA_NOT_READY",
+  migrationFile: "server/supabase/migrations/20260325_add_courier_profile_fields.sql",
+  schemaFile: "server/supabase/schema.sql",
+  requiredTables: ["public.couriers"],
+  requiredColumns: ["public.couriers.transport_type", "public.couriers.online_status"]
+};
+
+function isSchemaCacheFresh(cache) {
+  return Date.now() - cache.checkedAt < SCHEMA_CACHE_TTL_MS;
 }
 
 export function isCourierSchemaError(error) {
@@ -40,6 +54,22 @@ export function isCourierSchemaError(error) {
   );
 }
 
+export function isCourierProfileSchemaError(error) {
+  if (!error) {
+    return false;
+  }
+
+  const errorCode = error.code || "";
+  const errorMessage = error.message || "";
+
+  return (
+    errorCode === "42703" ||
+    errorCode === "PGRST200" ||
+    errorMessage.includes("transport_type") ||
+    errorMessage.includes("online_status")
+  );
+}
+
 export function createCourierSchemaNotReadyError(reason = "Courier schema has not been applied yet.") {
   return createAppError(
     503,
@@ -51,12 +81,23 @@ export function createCourierSchemaNotReadyError(reason = "Courier schema has no
   );
 }
 
+export function createCourierProfileSchemaNotReadyError(reason = "Courier profile fields are not ready yet.") {
+  return createAppError(
+    503,
+    "Kuryer profil maydonlari hali tayyor emas. Yangi courier profile migratsiyasini Supabase bazasiga qo'llash kerak.",
+    {
+      ...COURIER_PROFILE_SCHEMA_DETAILS,
+      reason
+    }
+  );
+}
+
 export async function ensureCourierSchemaReady() {
-  if (courierSchemaCache.ready === true && isSchemaCacheFresh()) {
+  if (courierSchemaCache.ready === true && isSchemaCacheFresh(courierSchemaCache)) {
     return true;
   }
 
-  if (courierSchemaCache.ready === false && isSchemaCacheFresh()) {
+  if (courierSchemaCache.ready === false && isSchemaCacheFresh(courierSchemaCache)) {
     throw createCourierSchemaNotReadyError(courierSchemaCache.reason);
   }
 
@@ -105,8 +146,63 @@ export async function ensureCourierSchemaReady() {
   return true;
 }
 
+export async function ensureCourierProfileSchemaReady() {
+  if (courierProfileSchemaCache.ready === true && isSchemaCacheFresh(courierProfileSchemaCache)) {
+    return true;
+  }
+
+  if (courierProfileSchemaCache.ready === false && isSchemaCacheFresh(courierProfileSchemaCache)) {
+    throw createCourierProfileSchemaNotReadyError(courierProfileSchemaCache.reason);
+  }
+
+  const profileColumnsCheck = await supabase
+    .from("couriers")
+    .select("id,transport_type,online_status")
+    .limit(1);
+
+  if (profileColumnsCheck.error) {
+    if (isCourierProfileSchemaError(profileColumnsCheck.error)) {
+      courierProfileSchemaCache = {
+        ready: false,
+        checkedAt: Date.now(),
+        reason: profileColumnsCheck.error.message
+      };
+      throw createCourierProfileSchemaNotReadyError(profileColumnsCheck.error.message);
+    }
+
+    throw createAppError(500, "Courier profile schema tekshirib bo'lmadi.", profileColumnsCheck.error);
+  }
+
+  courierProfileSchemaCache = {
+    ready: true,
+    checkedAt: Date.now(),
+    reason: "ready"
+  };
+
+  return true;
+}
+
+export async function hasCourierProfileSchema() {
+  try {
+    await ensureCourierProfileSchemaReady();
+    return true;
+  } catch (error) {
+    if (error?.details?.code === COURIER_PROFILE_SCHEMA_DETAILS.code) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 export function resetCourierSchemaCache() {
   courierSchemaCache = {
+    ready: null,
+    checkedAt: 0,
+    reason: ""
+  };
+
+  courierProfileSchemaCache = {
     ready: null,
     checkedAt: 0,
     reason: ""

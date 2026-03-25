@@ -13,6 +13,8 @@ export const ORDER_STATUS_VALUES = [
 ];
 
 export const COURIER_STATUS_VALUES = ["pending", "approved", "blocked"];
+export const COURIER_TRANSPORT_VALUES = ["foot", "bike", "moto", "car"];
+export const COURIER_ONLINE_STATUS_VALUES = ["offline", "online"];
 
 const telegramUserSchema = z.object({
   id: z.number().int().positive("Telegram user ID noto'g'ri."),
@@ -67,16 +69,49 @@ export const assignCourierSchema = z.object({
   courierId: z.string().uuid("Kuryer ID noto'g'ri.").nullable().optional()
 });
 
+export const ensureCourierSchema = z.object({
+  telegramUser: telegramUserSchema
+});
+
 export const registerCourierSchema = z.object({
   fullName: z.string().trim().min(2, "F.I.Sh. kamida 2 ta belgidan iborat bo'lishi kerak.").max(120).optional(),
   phone: z.string().trim().regex(phonePattern, "Telefon raqami noto'g'ri formatda."),
+  transportType: z.enum(COURIER_TRANSPORT_VALUES).optional(),
   telegramUser: telegramUserSchema
 });
+
+export const updateCourierProfileSchema = z
+  .object({
+    fullName: z.string().trim().min(2, "F.I.Sh. kamida 2 ta belgidan iborat bo'lishi kerak.").max(120).optional(),
+    phone: z.string().trim().regex(phonePattern, "Telefon raqami noto'g'ri formatda.").optional(),
+    transportType: z.enum(COURIER_TRANSPORT_VALUES, {
+      errorMap: () => ({ message: "Transport turi noto'g'ri." })
+    }).optional(),
+    submitForApproval: z.boolean().optional()
+  })
+  .superRefine((payload, context) => {
+    const hasAnyValue = Object.values(payload).some((value) => value !== undefined);
+
+    if (!hasAnyValue) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Kamida bitta courier profile maydoni yuborilishi kerak."
+      });
+    }
+  });
 
 export const updateCourierStatusSchema = z.object({
   status: z.enum(COURIER_STATUS_VALUES, {
     errorMap: () => ({
       message: "Kuryer statusi noto'g'ri."
+    })
+  })
+});
+
+export const updateCourierOnlineStatusSchema = z.object({
+  onlineStatus: z.enum(COURIER_ONLINE_STATUS_VALUES, {
+    errorMap: () => ({
+      message: "Online holat noto'g'ri."
     })
   })
 });

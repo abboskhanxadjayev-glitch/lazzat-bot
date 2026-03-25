@@ -33,9 +33,7 @@ function getWebhookSecret(token) {
     || createHash("sha256").update(token).digest("hex").slice(0, 32);
 }
 
-function getWebhookPath(secret) {
-  return `/api/telegram/webhook/${secret}`;
-}
+const TELEGRAM_WEBHOOK_PATH = "/api/telegram/webhook";
 
 export async function registerTelegramBotWebhook(app) {
   const token = getBotToken();
@@ -48,7 +46,7 @@ export async function registerTelegramBotWebhook(app) {
   try {
     const { createBot, syncBotConfiguration } = await import("../../../bot/src/index.js");
     const webhookSecret = getWebhookSecret(token);
-    const webhookPath = getWebhookPath(webhookSecret);
+    const webhookPath = TELEGRAM_WEBHOOK_PATH;
     const bot = createBot({
       token,
       miniAppUrl: getMiniAppUrl()
@@ -142,3 +140,4 @@ export function getTelegramBotWebhookInfo() {
     hasWebhookSecret: Boolean(botRuntime.webhookSecret)
   };
 }
+

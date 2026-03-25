@@ -6,6 +6,7 @@ import categoryRoutes from "./routes/categoryRoutes.js";
 import courierRoutes from "./routes/courierRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
+import { registerTelegramBotWebhook } from "./services/telegramBotWebhookService.js";
 
 const app = express();
 
@@ -15,6 +16,8 @@ const corsOrigin = env.corsOrigin === "*"
 
 app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
+
+await registerTelegramBotWebhook(app);
 
 app.get("/api/health", (_req, res) => {
   res.json({

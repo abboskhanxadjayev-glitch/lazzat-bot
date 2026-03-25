@@ -3,14 +3,9 @@ import app from "./app.js";
 import { env } from "./config/env.js";
 import { verifySupabaseConnection } from "./config/supabase.js";
 import { logTelegramConfiguration } from "./services/telegramService.js";
-import {
-  registerTelegramBotWebhook,
-  syncTelegramBotWebhook
-} from "./services/telegramBotWebhookService.js";
+import { syncTelegramBotWebhook } from "./services/telegramBotWebhookService.js";
 
 async function startServer() {
-  await registerTelegramBotWebhook(app);
-
   app.listen(env.port, async () => {
     console.log(`Lazzat API listening on http://localhost:${env.port}`);
 

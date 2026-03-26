@@ -143,7 +143,8 @@ function getFreeTextKeyboard() {
 }
 
 function getCourierPanelKeyboard(courier, config) {
-  const toggleButtons = courier?.status === "approved"
+  const isApprovedCourier = courier?.status === "approved";
+  const toggleButtons = isApprovedCourier
     ? [Markup.button.text(ONLINE_BUTTON_LABEL), Markup.button.text(OFFLINE_BUTTON_LABEL)]
     : [];
 
@@ -155,10 +156,11 @@ function getCourierPanelKeyboard(courier, config) {
     rows.push(toggleButtons);
   }
 
-  rows.push([
-    Markup.button.webApp(ORDER_BUTTON_LABEL, config.normalizedMiniAppUrl),
-    Markup.button.text(COURIER_BUTTON_LABEL)
-  ]);
+  rows.push(
+    isApprovedCourier
+      ? [Markup.button.text(ORDER_BUTTON_LABEL)]
+      : [Markup.button.text(ORDER_BUTTON_LABEL), Markup.button.text(COURIER_BUTTON_LABEL)]
+  );
 
   return Markup.keyboard(rows).resize();
 }
@@ -259,9 +261,9 @@ function getHelpText() {
   return [
     "Lazzat Oshxonasi boti.",
     "",
-    `• Buyurtma berish uchun: ${ORDER_BUTTON_LABEL}`,
-    `• Kuryer onboardingi uchun: ${COURIER_BUTTON_LABEL}`,
-    "• Telegram ID ni ko'rish uchun: /myid"
+    `- Buyurtma berish uchun: ${ORDER_BUTTON_LABEL}`,
+    `- Kuryer onboardingi uchun: ${COURIER_BUTTON_LABEL}`,
+    "- Telegram ID ni ko'rish uchun: /myid"
   ].join("\n");
 }
 
@@ -646,6 +648,10 @@ export function createBot(options = {}) {
     }
   });
 
+  bot.hears(ORDER_BUTTON_LABEL, async (ctx) => {
+    clearOnboardingState(ctx.from?.id);
+    await ctx.reply("Buyurtma berish uchun Mini App tugmasidan foydalaning.", getMainKeyboard(config));
+  });
   bot.hears(COURIER_BUTTON_LABEL, async (ctx) => handleCourierEntry(ctx, config));
   bot.hears(ONLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "online", config));
   bot.hears(OFFLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "offline", config));

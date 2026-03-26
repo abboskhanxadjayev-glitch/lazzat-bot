@@ -4,6 +4,7 @@ import AdminOrderDetailCard from "../components/AdminOrderDetailCard";
 import AdminOrderList from "../components/AdminOrderList";
 import LiveFeedStatus from "../components/LiveFeedStatus";
 import { STATUS_LABELS } from "../components/OrderStatusBadge";
+import { useAdminAnalytics } from "../hooks/useAdminAnalytics";
 import { useLiveCouriers } from "../hooks/useLiveCouriers";
 import { useLiveOrders } from "../hooks/useLiveOrders";
 import { formatCurrency } from "../utils/formatCurrency";
@@ -13,13 +14,47 @@ const STATUS_FILTER_OPTIONS = [
   ...Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
 ];
 
-function isSameLocalDay(dateValue, referenceDate) {
-  const date = new Date(dateValue);
+const COURIER_STATUS_LABELS = {
+  pending: "Kutilmoqda",
+  approved: "Tasdiqlangan",
+  blocked: "Bloklangan"
+};
 
+const COURIER_STATUS_STYLES = {
+  pending: "border-amber-200 bg-amber-100 text-amber-800",
+  approved: "border-emerald-200 bg-emerald-100 text-emerald-800",
+  blocked: "border-rose-200 bg-rose-100 text-rose-800"
+};
+
+const ONLINE_STATUS_STYLES = {
+  online: "border-emerald-200 bg-emerald-100 text-emerald-800",
+  offline: "border-slate-200 bg-slate-100 text-slate-700"
+};
+
+function PerformanceBadge({ label, tone }) {
   return (
-    date.getFullYear() === referenceDate.getFullYear()
-    && date.getMonth() === referenceDate.getMonth()
-    && date.getDate() === referenceDate.getDate()
+    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] ${tone}`}>
+      {label}
+    </span>
+  );
+}
+
+function TopCourierCard({ title, courier, metricLabel, metricValue }) {
+  return (
+    <div className="surface-card rounded-[28px] p-5">
+      <p className="section-label">{title}</p>
+      {courier ? (
+        <>
+          <p className="mt-3 text-lg font-bold text-lazzat-maroon">{courier.fullName}</p>
+          <p className="mt-1 text-sm text-lazzat-ink/60">{courier.phone || "Telefon yo'q"}</p>
+          <p className="mt-3 text-sm font-semibold text-lazzat-maroon">
+            {metricLabel}: {metricValue}
+          </p>
+        </>
+      ) : (
+        <p className="mt-3 text-sm text-lazzat-ink/60">Bugun hali yetkazilgan buyurtma yo'q.</p>
+      )}
+    </div>
   );
 }
 
@@ -27,7 +62,6 @@ function AdminOrdersPage() {
   const {
     orders,
     isInitialLoading,
-    error,
     errorMessage,
     lastUpdatedAt,
     liveMode,
@@ -40,6 +74,14 @@ function AdminOrdersPage() {
   } = useLiveCouriers({
     channelKey: "admin-order-couriers"
   });
+  const {
+    analytics,
+    courierPerformance,
+    isInitialLoading: analyticsLoading,
+    errorMessage: analyticsErrorMessage,
+    lastUpdatedAt: analyticsLastUpdatedAt,
+    liveMode: analyticsLiveMode
+  } = useAdminAnalytics();
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [statusValue, setStatusValue] = useState("pending");
   const [statusSaving, setStatusSaving] = useState(false);
@@ -51,6 +93,16 @@ function AdminOrdersPage() {
   const [assignmentMessage, setAssignmentMessage] = useState("");
   const lastSelectedOrderIdRef = useRef("");
   const lastSyncedStatusRef = useRef(null);
+
+  const combinedLastUpdatedAt = useMemo(() => {
+    if (lastUpdatedAt && analyticsLastUpdatedAt) {
+      return new Date(Math.max(lastUpdatedAt.getTime(), analyticsLastUpdatedAt.getTime()));
+    }
+
+    return lastUpdatedAt || analyticsLastUpdatedAt || null;
+  }, [analyticsLastUpdatedAt, lastUpdatedAt]);
+
+  const combinedLiveMode = liveMode === "realtime" ? liveMode : analyticsLiveMode;
 
   const filteredOrders = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -66,7 +118,13 @@ function AdminOrdersPage() {
         return true;
       }
 
-      const haystack = [order.customerName, order.phone, order.address, order.courier?.fullName]
+      const haystack = [
+        order.customerName,
+        order.phone,
+        order.address,
+        order.courier?.fullName,
+        order.assignmentMethod === "auto" ? "auto" : order.assignmentMethod === "manual" ? "manual" : ""
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -129,21 +187,6 @@ function AdminOrdersPage() {
     setAssignmentMessage("");
   }, [selectedOrderId]);
 
-  const stats = useMemo(() => {
-    const today = new Date();
-    const todayOrders = orders.filter((order) => isSameLocalDay(order.createdAt, today));
-    const todayRevenue = todayOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
-
-    return {
-      totalOrders: orders.length,
-      pendingCount: orders.filter((order) => order.status === "pending").length,
-      assignedCount: orders.filter((order) => order.status === "assigned").length,
-      deliveredCount: orders.filter((order) => order.status === "delivered").length,
-      todayOrders: todayOrders.length,
-      todayRevenue
-    };
-  }, [orders]);
-
   const approvedCouriers = useMemo(
     () => couriers.filter((courier) => courier.status === "approved" && courier.isActive && courier.onlineStatus === "online"),
     [couriers]
@@ -192,7 +235,9 @@ function AdminOrdersPage() {
       applyOrderPatch(updatedOrder);
       setStatusValue(updatedOrder.status);
       lastSyncedStatusRef.current = updatedOrder.status;
-      setStatusMessage("Status muvaffaqiyatli yangilandi.");
+      setStatusMessage(updatedOrder.status === "pending" && statusValue === "assigned"
+        ? "Mos online kuryer topilmadi, buyurtma pending holatda qoldi."
+        : "Status muvaffaqiyatli yangilandi.");
     } catch (requestError) {
       console.error("[admin] status update error", requestError);
       setStatusMessage(requestError.message || "Statusni yangilab bo'lmadi.");
@@ -249,38 +294,134 @@ function AdminOrdersPage() {
         <div>
           <p className="section-label">Jonli kuzatuv</p>
           <p className="mt-2 text-sm text-lazzat-ink/70">
-            Buyurtmalar ro'yxati, hisoblagichlar va tafsilotlar avtomatik yangilanadi.
+            Analitika, buyurtmalar ro'yxati va kuryer yuklamasi avtomatik yangilanadi. Smart assignment eng yaqin online kuryerni tanlaydi.
           </p>
         </div>
-        <LiveFeedStatus liveMode={liveMode} lastUpdatedAt={lastUpdatedAt} />
+        <LiveFeedStatus liveMode={combinedLiveMode} lastUpdatedAt={combinedLastUpdatedAt} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <div className="surface-card rounded-[28px] p-5">
-          <p className="section-label">Jami buyurtma</p>
-          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.totalOrders}</p>
+      {analyticsErrorMessage ? (
+        <div className="surface-card rounded-[28px] border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
+          {analyticsErrorMessage}
         </div>
+      ) : null}
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
         <div className="surface-card rounded-[28px] p-5">
-          <p className="section-label">Kutilayotgan</p>
-          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.pendingCount}</p>
-        </div>
-        <div className="surface-card rounded-[28px] p-5">
-          <p className="section-label">Biriktirilgan</p>
-          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.assignedCount}</p>
-        </div>
-        <div className="surface-card rounded-[28px] p-5">
-          <p className="section-label">Yetkazildi</p>
-          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.deliveredCount}</p>
+          <p className="section-label">Bugungi buyurtmalar</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{analytics.todayOrderCount}</p>
         </div>
         <div className="surface-card rounded-[28px] p-5">
           <p className="section-label">Bugungi aylanma</p>
-          <p className="mt-3 text-2xl font-bold text-lazzat-maroon">{formatCurrency(stats.todayRevenue)}</p>
+          <p className="mt-3 text-2xl font-bold text-lazzat-maroon">{formatCurrency(analytics.todayRevenue)}</p>
         </div>
         <div className="surface-card rounded-[28px] p-5">
-          <p className="section-label">Bugungi buyurtma</p>
-          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.todayOrders}</p>
+          <p className="section-label">Faol buyurtmalar</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{analytics.activeOrderCount}</p>
+        </div>
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">Yetkazilganlar</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{analytics.deliveredOrderCount}</p>
+        </div>
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">Online kuryer</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{analytics.onlineCourierCount}</p>
+        </div>
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">Offline kuryer</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{analytics.offlineCourierCount}</p>
+        </div>
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">Bugungi delivery fee</p>
+          <p className="mt-3 text-2xl font-bold text-lazzat-maroon">{formatCurrency(analytics.todayDeliveryFeeTotal)}</p>
         </div>
       </div>
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <div className="surface-card rounded-[28px] p-5">
+          <p className="section-label">O'rtacha buyurtma</p>
+          <p className="mt-3 text-2xl font-bold text-lazzat-maroon">{formatCurrency(analytics.averageOrderValueToday)}</p>
+          <p className="mt-2 text-sm text-lazzat-ink/60">Bugungi buyurtmalar bo'yicha o'rtacha qiymat.</p>
+        </div>
+        <TopCourierCard
+          title="Eng faol kuryer"
+          courier={analytics.topCourierTodayByDeliveredOrders}
+          metricLabel="Yetkazilganlar"
+          metricValue={analytics.topCourierTodayByDeliveredOrders ? analytics.topCourierTodayByDeliveredOrders.deliveredOrdersToday : 0}
+        />
+        <TopCourierCard
+          title="Eng yuqori revenue"
+          courier={analytics.topCourierTodayByRevenue}
+          metricLabel="Revenue"
+          metricValue={analytics.topCourierTodayByRevenue ? formatCurrency(analytics.topCourierTodayByRevenue.totalDeliveredRevenueToday) : formatCurrency(0)}
+        />
+      </div>
+
+      <section className="surface-card rounded-[30px] p-5 sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="section-label">Courier performance</p>
+            <h2 className="mt-2 text-xl font-bold text-lazzat-maroon">Bugungi yuklama va natijalar</h2>
+            <p className="mt-3 text-sm leading-6 text-lazzat-ink/70">
+              Online/offline holat, faol buyurtmalar soni va bugungi delivered revenue bo'yicha kuryerlar kesimini ko'ring.
+            </p>
+          </div>
+          <p className="text-sm text-lazzat-ink/55">
+            {analytics.generatedAt ? `Yangilandi: ${new Intl.DateTimeFormat("uz-UZ", { dateStyle: "medium", timeStyle: "short" }).format(new Date(analytics.generatedAt))}` : "Yangilanmoqda..."}
+          </p>
+        </div>
+
+        {analyticsLoading ? (
+          <div className="mt-4 rounded-[24px] border border-lazzat-gold/15 bg-lazzat-cream/50 p-4 text-sm text-lazzat-ink/65">
+            Analitika yuklanmoqda...
+          </div>
+        ) : null}
+
+        {!analyticsLoading && !courierPerformance.length ? (
+          <div className="mt-4 rounded-[24px] border border-lazzat-gold/15 bg-lazzat-cream/50 p-4 text-sm text-lazzat-ink/65">
+            Hozircha kuryer performansi uchun ma'lumot yo'q.
+          </div>
+        ) : null}
+
+        {!analyticsLoading && courierPerformance.length ? (
+          <div className="mt-4 space-y-3">
+            {courierPerformance.map((row) => (
+              <div key={row.courierId} className="rounded-[24px] border border-lazzat-gold/15 bg-white/80 p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <p className="text-base font-bold text-lazzat-maroon">{row.fullName}</p>
+                    <p className="mt-1 text-sm text-lazzat-ink/60">{row.phone || "Telefon yo'q"}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <PerformanceBadge
+                      label={COURIER_STATUS_LABELS[row.status] || row.status}
+                      tone={COURIER_STATUS_STYLES[row.status] || COURIER_STATUS_STYLES.pending}
+                    />
+                    <PerformanceBadge
+                      label={row.onlineStatus === "online" ? "Online" : "Offline"}
+                      tone={ONLINE_STATUS_STYLES[row.onlineStatus] || ONLINE_STATUS_STYLES.offline}
+                    />
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-[20px] border border-lazzat-gold/10 bg-lazzat-cream/60 px-4 py-3">
+                    <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-lazzat-red/60">Faol buyurtmalar</p>
+                    <p className="mt-2 text-xl font-bold text-lazzat-maroon">{row.activeOrderCount}</p>
+                  </div>
+                  <div className="rounded-[20px] border border-lazzat-gold/10 bg-lazzat-cream/60 px-4 py-3">
+                    <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-lazzat-red/60">Bugun delivered</p>
+                    <p className="mt-2 text-xl font-bold text-lazzat-maroon">{row.deliveredOrdersToday}</p>
+                  </div>
+                  <div className="rounded-[20px] border border-lazzat-gold/10 bg-lazzat-cream/60 px-4 py-3">
+                    <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-lazzat-red/60">Bugungi revenue</p>
+                    <p className="mt-2 text-xl font-bold text-lazzat-maroon">{formatCurrency(row.totalDeliveredRevenueToday)}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
 
       <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <section className="space-y-4">
@@ -290,7 +431,7 @@ function AdminOrdersPage() {
               <h2 className="mt-2 text-xl font-bold text-lazzat-maroon">Operator kuzatuvi</h2>
             </div>
             <p className="mt-3 text-sm leading-6 text-lazzat-ink/70">
-              Telefon, manzil, summa, status va biriktirilgan kuryer bo'yicha buyurtmalarni tez ko'rib chiqing.
+              Telefon, manzil, summa, status, smart assignment usuli va biriktirilgan kuryer bo'yicha buyurtmalarni tez ko'rib chiqing.
             </p>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -302,7 +443,7 @@ function AdminOrdersPage() {
                   type="search"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Ism, telefon, manzil yoki kuryer"
+                  placeholder="Ism, telefon, manzil, kuryer, auto/manual"
                   className="field-input"
                 />
               </label>
@@ -351,7 +492,7 @@ function AdminOrdersPage() {
 
         <div className="space-y-4">
           {statusMessage ? (
-            <div className={`surface-card rounded-[28px] p-5 text-sm ${statusMessage.includes("muvaffaqiyatli") ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-rose-200 bg-rose-50 text-rose-700"}`}>
+            <div className={`surface-card rounded-[28px] p-5 text-sm ${statusMessage.includes("muvaffaqiyatli") || statusMessage.includes("pending") ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-rose-200 bg-rose-50 text-rose-700"}`}>
               {statusMessage}
             </div>
           ) : null}

@@ -1,7 +1,12 @@
 import { env } from "../config/env.js";
 import { supabase } from "../config/supabase.js";
 import { createAppError } from "../utils/appError.js";
-import { getDeliveryDetails } from "../utils/delivery.js";
+import {
+  calculateDistanceKm,
+  getDeliveryDetails,
+  RESTAURANT_LOCATION,
+  roundDistanceKm
+} from "../utils/delivery.js";
 import { getProductsByIds } from "./catalogService.js";
 import {
   ensureCourierProfileSchemaReady,
@@ -12,12 +17,29 @@ import {
 import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
 import { sendCourierAssignmentNotification, sendOrderNotification } from "./telegramService.js";
 
-const BASE_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
-const ENHANCED_ORDER_SELECT_FIELDS = `${BASE_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
+const LEGACY_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
+const ORDER_ASSIGNMENT_META_SELECT_FIELDS = `${LEGACY_ORDER_SELECT_FIELDS}, assignment_method, assignment_distance_km`;
+const ENHANCED_ORDER_SELECT_FIELDS = `${ORDER_ASSIGNMENT_META_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
+const COURIER_ASSIGNMENT_BASE_SELECT_FIELDS = "id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at";
+const COURIER_ASSIGNMENT_LOCATION_SELECT_FIELDS = `${COURIER_ASSIGNMENT_BASE_SELECT_FIELDS}, base_latitude, base_longitude`;
 const ACTIVE_COURIER_ORDER_STATUSES = ["assigned", "accepted", "ready_for_delivery", "on_the_way"];
+const AUTO_ASSIGNMENT_ACTIVE_ORDER_STATUSES = ["assigned", "accepted", "preparing", "ready_for_delivery", "on_the_way"];
 
-const ORDER_ASSIGNMENT_SCHEMA_TTL_MS = 60_000;
-let orderAssignmentSchemaCache = {
+const ORDER_QUERY_SCHEMA_TTL_MS = 60_000;
+const ORDER_ASSIGNMENT_METADATA_TTL_MS = 60_000;
+const COURIER_ASSIGNMENT_LOCATION_TTL_MS = 60_000;
+
+let orderQuerySchemaCache = {
+  mode: null,
+  checkedAt: 0
+};
+
+let orderAssignmentMetadataCache = {
+  available: null,
+  checkedAt: 0
+};
+
+let courierAssignmentLocationCache = {
   available: null,
   checkedAt: 0
 };
@@ -38,7 +60,11 @@ function ensureSupabaseReady() {
   );
 }
 
-function isOrderAssignmentSchemaError(error) {
+function hasFreshCache(checkedAt, ttlMs) {
+  return Date.now() - checkedAt < ttlMs;
+}
+
+function isOrderRelationSchemaError(error) {
   if (!error) {
     return false;
   }
@@ -47,43 +73,126 @@ function isOrderAssignmentSchemaError(error) {
   const errorMessage = error.message || "";
 
   return (
-    isCourierSchemaError(error) ||
-    errorCode === "42703" ||
-    errorCode === "PGRST200" ||
-    errorMessage.includes("courier_id") ||
-    errorMessage.includes("assigned_at") ||
-    errorMessage.includes("relationship")
+    isCourierSchemaError(error)
+    || errorCode === "42703"
+    || errorCode === "PGRST200"
+    || errorMessage.includes("courier_id")
+    || errorMessage.includes("assigned_at")
+    || errorMessage.includes("relationship")
   );
 }
 
-function hasFreshOrderAssignmentSchemaCache() {
-  return Date.now() - orderAssignmentSchemaCache.checkedAt < ORDER_ASSIGNMENT_SCHEMA_TTL_MS;
+function isOrderAssignmentMetadataError(error) {
+  if (!error) {
+    return false;
+  }
+
+  const errorCode = error.code || "";
+  const errorMessage = error.message || "";
+
+  return (
+    errorCode === "42703"
+    || errorCode === "PGRST200"
+    || errorMessage.includes("assignment_method")
+    || errorMessage.includes("assignment_distance_km")
+  );
+}
+
+function isCourierAssignmentLocationError(error) {
+  if (!error) {
+    return false;
+  }
+
+  const errorCode = error.code || "";
+  const errorMessage = error.message || "";
+
+  return (
+    errorCode === "42703"
+    || errorCode === "PGRST200"
+    || errorMessage.includes("base_latitude")
+    || errorMessage.includes("base_longitude")
+  );
 }
 
 async function runOrderQuery(buildQuery) {
-  if (orderAssignmentSchemaCache.available !== false || !hasFreshOrderAssignmentSchemaCache()) {
+  const canReuseOrderQueryMode = hasFreshCache(orderQuerySchemaCache.checkedAt, ORDER_QUERY_SCHEMA_TTL_MS);
+  const currentMode = canReuseOrderQueryMode ? orderQuerySchemaCache.mode : null;
+
+  if (currentMode !== "meta" && currentMode !== "legacy") {
     const enhancedResult = await buildQuery(ENHANCED_ORDER_SELECT_FIELDS);
 
     if (!enhancedResult.error) {
-      orderAssignmentSchemaCache = {
-        available: true,
+      orderQuerySchemaCache = {
+        mode: "enhanced",
         checkedAt: Date.now()
       };
       return enhancedResult;
     }
 
-    if (!isOrderAssignmentSchemaError(enhancedResult.error)) {
+    if (!isOrderRelationSchemaError(enhancedResult.error) && !isOrderAssignmentMetadataError(enhancedResult.error)) {
       return enhancedResult;
     }
 
-    orderAssignmentSchemaCache = {
+    console.warn("[orders] enhanced order select unavailable, falling back", enhancedResult.error.message);
+  }
+
+  if (currentMode !== "legacy") {
+    const metaResult = await buildQuery(ORDER_ASSIGNMENT_META_SELECT_FIELDS);
+
+    if (!metaResult.error) {
+      orderQuerySchemaCache = {
+        mode: "meta",
+        checkedAt: Date.now()
+      };
+      return metaResult;
+    }
+
+    if (!isOrderAssignmentMetadataError(metaResult.error)) {
+      return metaResult;
+    }
+
+    console.warn("[orders] assignment metadata fields unavailable, falling back", metaResult.error.message);
+  }
+
+  const legacyResult = await buildQuery(LEGACY_ORDER_SELECT_FIELDS);
+
+  if (!legacyResult.error) {
+    orderQuerySchemaCache = {
+      mode: "legacy",
+      checkedAt: Date.now()
+    };
+  }
+
+  return legacyResult;
+}
+
+async function runCourierAssignmentQuery(buildQuery) {
+  const canReuseLocationMode = hasFreshCache(courierAssignmentLocationCache.checkedAt, COURIER_ASSIGNMENT_LOCATION_TTL_MS);
+  const shouldTryLocationFields = courierAssignmentLocationCache.available !== false || !canReuseLocationMode;
+
+  if (shouldTryLocationFields) {
+    const locationResult = await buildQuery(COURIER_ASSIGNMENT_LOCATION_SELECT_FIELDS);
+
+    if (!locationResult.error) {
+      courierAssignmentLocationCache = {
+        available: true,
+        checkedAt: Date.now()
+      };
+      return locationResult;
+    }
+
+    if (!isCourierAssignmentLocationError(locationResult.error)) {
+      return locationResult;
+    }
+
+    courierAssignmentLocationCache = {
       available: false,
       checkedAt: Date.now()
     };
-    console.warn("[orders] assignment schema not detected, falling back to legacy select", enhancedResult.error.message);
+    console.warn("[couriers] assignment location fields unavailable, falling back", locationResult.error.message);
   }
 
-  return buildQuery(BASE_ORDER_SELECT_FIELDS);
+  return buildQuery(COURIER_ASSIGNMENT_BASE_SELECT_FIELDS);
 }
 
 function normalizeItems(products, requestedItems) {
@@ -147,6 +256,13 @@ function mapCourierRecord(courierRecord) {
     return null;
   }
 
+  const baseLatitude = courierRecord.base_latitude === undefined || courierRecord.base_latitude === null
+    ? null
+    : Number(courierRecord.base_latitude);
+  const baseLongitude = courierRecord.base_longitude === undefined || courierRecord.base_longitude === null
+    ? null
+    : Number(courierRecord.base_longitude);
+
   return {
     id: courierRecord.id,
     telegramUserId: Number(courierRecord.telegram_user_id),
@@ -157,8 +273,26 @@ function mapCourierRecord(courierRecord) {
     status: courierRecord.status,
     isActive: Boolean(courierRecord.is_active),
     createdAt: courierRecord.created_at || null,
-    updatedAt: courierRecord.updated_at || null
+    updatedAt: courierRecord.updated_at || null,
+    baseLatitude,
+    baseLongitude
   };
+}
+
+function buildAssignmentReason(assignmentMethod, assignmentDistanceKm) {
+  if (assignmentMethod === "auto") {
+    if (assignmentDistanceKm !== null && assignmentDistanceKm !== undefined) {
+      return `Tizim eng yaqin online tasdiqlangan kuryerni ${Number(assignmentDistanceKm).toFixed(2)} km masofa bo'yicha tanladi. Teng holatda kamroq faol buyurtmali kuryer ustun bo'ladi.`;
+    }
+
+    return "Tizim online va tasdiqlangan kuryerlar orasidan kamroq faol buyurtmali kuryerni tanladi.";
+  }
+
+  if (assignmentMethod === "manual") {
+    return "Buyurtma operator tomonidan qo'lda biriktirildi.";
+  }
+
+  return "";
 }
 
 function mapOrderRecord(orderRecord, orderItems = []) {
@@ -182,6 +316,11 @@ function mapOrderRecord(orderRecord, orderItems = []) {
   const courier = mapCourierRecord(orderRecord.courier || null);
   const courierId = orderRecord.courier_id ?? courier?.id ?? null;
   const assignedAt = orderRecord.assigned_at ?? null;
+  const assignmentMethod = orderRecord.assignment_method ?? null;
+  const assignmentDistanceKm = orderRecord.assignment_distance_km === null || orderRecord.assignment_distance_km === undefined
+    ? null
+    : Number(orderRecord.assignment_distance_km);
+  const assignmentReason = buildAssignmentReason(assignmentMethod, assignmentDistanceKm);
 
   return {
     id: orderRecord.id,
@@ -202,6 +341,8 @@ function mapOrderRecord(orderRecord, orderItems = []) {
     courierId,
     assignedAt,
     courier,
+    assignmentMethod,
+    assignmentDistanceKm,
     customer: {
       name: orderRecord.customer_name,
       phone: orderRecord.phone
@@ -224,7 +365,10 @@ function mapOrderRecord(orderRecord, orderItems = []) {
     assignment: {
       courierId,
       assignedAt,
-      courier
+      courier,
+      method: assignmentMethod,
+      distanceKm: assignmentDistanceKm,
+      reason: assignmentReason
     }
   };
 }
@@ -322,11 +466,11 @@ async function updateOrderRecordStatus(orderId, status) {
 }
 
 async function getCourierRecordById(courierId) {
-  const { data, error } = await supabase
+  const { data, error } = await runCourierAssignmentQuery((selectFields) => supabase
     .from("couriers")
-    .select("id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at")
+    .select(selectFields)
     .eq("id", courierId)
-    .maybeSingle();
+    .maybeSingle());
 
   if (error) {
     if (isCourierSchemaError(error)) {
@@ -351,12 +495,12 @@ async function getEligibleCouriersForAssignment() {
   await ensureCourierSchemaReady();
   await ensureCourierProfileSchemaReady();
 
-  const { data, error } = await supabase
+  const { data, error } = await runCourierAssignmentQuery((selectFields) => supabase
     .from("couriers")
-    .select("id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at")
+    .select(selectFields)
     .eq("status", "approved")
     .eq("is_active", true)
-    .eq("online_status", "online");
+    .eq("online_status", "online"));
 
   if (error) {
     if (isCourierSchemaError(error)) {
@@ -373,60 +517,204 @@ async function getEligibleCouriersForAssignment() {
   return data || [];
 }
 
-function pickCourierForAssignment(couriers = []) {
-  if (!couriers.length) {
+async function getActiveOrderCountByCourierIds(courierIds = []) {
+  if (!courierIds.length) {
+    return new Map();
+  }
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("courier_id,status")
+    .in("courier_id", courierIds)
+    .in("status", AUTO_ASSIGNMENT_ACTIVE_ORDER_STATUSES);
+
+  if (error) {
+    throw createAppError(500, "Kuryer yuklamasini hisoblab bo'lmadi.", error);
+  }
+
+  return (data || []).reduce((map, item) => {
+    const currentCount = map.get(item.courier_id) || 0;
+    map.set(item.courier_id, currentCount + 1);
+    return map;
+  }, new Map());
+}
+
+function hasCoordinates(lat, lng) {
+  return Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+}
+
+function getCourierOriginLocation(courierRecord) {
+  if (hasCoordinates(courierRecord.base_latitude, courierRecord.base_longitude)) {
+    return {
+      latitude: Number(courierRecord.base_latitude),
+      longitude: Number(courierRecord.base_longitude),
+      source: "courier_base"
+    };
+  }
+
+  return {
+    latitude: RESTAURANT_LOCATION.latitude,
+    longitude: RESTAURANT_LOCATION.longitude,
+    source: "restaurant_fallback"
+  };
+}
+
+function getOrderDestinationLocation(orderRecord) {
+  if (!hasCoordinates(orderRecord.customer_lat, orderRecord.customer_lng)) {
     return null;
   }
 
-  const randomIndex = Math.floor(Math.random() * couriers.length);
-  return couriers[randomIndex] || null;
+  return {
+    latitude: Number(orderRecord.customer_lat),
+    longitude: Number(orderRecord.customer_lng)
+  };
 }
 
-async function updateOrderAssignment(orderId, courierId, status, assignedAt) {
-  const { error } = await supabase
+function calculateCourierDistanceToOrder(orderRecord, courierRecord) {
+  const destination = getOrderDestinationLocation(orderRecord);
+
+  if (!destination) {
+    return null;
+  }
+
+  const origin = getCourierOriginLocation(courierRecord);
+  return roundDistanceKm(calculateDistanceKm(origin, destination));
+}
+
+function rankCourierCandidates(orderRecord, couriers, activeOrderCounts) {
+  return couriers
+    .map((courier) => ({
+      ...courier,
+      activeOrderCount: activeOrderCounts.get(courier.id) || 0,
+      assignmentDistanceKm: calculateCourierDistanceToOrder(orderRecord, courier),
+      assignmentLocationSource: getCourierOriginLocation(courier).source
+    }))
+    .sort((left, right) => {
+      const leftDistance = left.assignmentDistanceKm === null || left.assignmentDistanceKm === undefined
+        ? Number.POSITIVE_INFINITY
+        : Number(left.assignmentDistanceKm);
+      const rightDistance = right.assignmentDistanceKm === null || right.assignmentDistanceKm === undefined
+        ? Number.POSITIVE_INFINITY
+        : Number(right.assignmentDistanceKm);
+
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
+
+      if (left.activeOrderCount !== right.activeOrderCount) {
+        return left.activeOrderCount - right.activeOrderCount;
+      }
+
+      return String(left.id).localeCompare(String(right.id));
+    });
+}
+
+async function updateOrderAssignment(orderId, courierId, status, assignedAt, assignment = {}) {
+  const assignmentMethod = assignment.method ?? null;
+  const assignmentDistanceKm = assignment.distanceKm === null || assignment.distanceKm === undefined
+    ? null
+    : Number(assignment.distanceKm);
+  const legacyPayload = {
+    courier_id: courierId,
+    status,
+    assigned_at: assignedAt
+  };
+  const canTryMetadataWrite = orderAssignmentMetadataCache.available !== false
+    || !hasFreshCache(orderAssignmentMetadataCache.checkedAt, ORDER_ASSIGNMENT_METADATA_TTL_MS);
+
+  if (canTryMetadataWrite) {
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        ...legacyPayload,
+        assignment_method: assignmentMethod,
+        assignment_distance_km: assignmentDistanceKm
+      })
+      .eq("id", orderId);
+
+    if (!error) {
+      orderAssignmentMetadataCache = {
+        available: true,
+        checkedAt: Date.now()
+      };
+      return;
+    }
+
+    if (!isOrderAssignmentMetadataError(error)) {
+      if (isOrderRelationSchemaError(error)) {
+        await ensureCourierSchemaReady();
+      }
+
+      throw createAppError(500, "Buyurtma biriktirish ma'lumotlarini saqlab bo'lmadi.", error);
+    }
+
+    orderAssignmentMetadataCache = {
+      available: false,
+      checkedAt: Date.now()
+    };
+    console.warn("[orders] assignment metadata columns unavailable, falling back to legacy assignment update", error.message);
+  }
+
+  const { error: legacyError } = await supabase
     .from("orders")
-    .update({
-      courier_id: courierId,
-      status,
-      assigned_at: assignedAt
-    })
+    .update(legacyPayload)
     .eq("id", orderId);
 
-  if (error) {
-    if (isOrderAssignmentSchemaError(error)) {
+  if (legacyError) {
+    if (isOrderRelationSchemaError(legacyError)) {
       await ensureCourierSchemaReady();
     }
 
-    throw createAppError(500, "Buyurtma biriktirish ma'lumotlarini saqlab bo'lmadi.", error);
+    throw createAppError(500, "Buyurtma biriktirish ma'lumotlarini saqlab bo'lmadi.", legacyError);
   }
 }
 
-async function autoAssignOrder(orderId) {
+async function autoAssignOrder(orderId, currentOrderRecord = null) {
   try {
-    const currentOrder = await getOrderRecordById(orderId);
+    const currentOrder = currentOrderRecord || await getOrderRecordById(orderId);
 
     if (currentOrder.courier_id && currentOrder.status === "assigned") {
-      return mapCourierRecord(currentOrder.courier || null);
+      return getOrderById(orderId);
     }
 
     const candidateCouriers = await getEligibleCouriersForAssignment();
-    const selectedCourier = pickCourierForAssignment(candidateCouriers);
 
-    if (!selectedCourier) {
+    if (!candidateCouriers.length) {
       console.log(`[orders] no approved online courier found for order ${orderId}; keeping pending status.`);
       return null;
     }
 
+    const activeOrderCounts = await getActiveOrderCountByCourierIds(candidateCouriers.map((courier) => courier.id));
+    const rankedCouriers = rankCourierCandidates(currentOrder, candidateCouriers, activeOrderCounts);
+    const selectedCourier = rankedCouriers[0] || null;
+
+    if (!selectedCourier) {
+      console.log(`[orders] no ranked courier candidate found for order ${orderId}; keeping pending status.`);
+      return null;
+    }
+
     const assignedAt = new Date().toISOString();
-    await updateOrderAssignment(orderId, selectedCourier.id, "assigned", assignedAt);
+    await updateOrderAssignment(orderId, selectedCourier.id, "assigned", assignedAt, {
+      method: "auto",
+      distanceKm: selectedCourier.assignmentDistanceKm
+    });
+
     const updatedOrder = await getOrderById(orderId);
     await maybeNotifyCourierAssigned({
       previousOrder: currentOrder,
       nextOrder: updatedOrder,
       courierRecord: selectedCourier
     });
-    console.log(`[orders] order ${orderId} auto-assigned to courier ${selectedCourier.id}`);
-    return selectedCourier;
+
+    console.log("[orders] order auto-assigned", {
+      orderId,
+      courierId: selectedCourier.id,
+      assignmentDistanceKm: selectedCourier.assignmentDistanceKm,
+      activeOrderCount: selectedCourier.activeOrderCount,
+      locationSource: selectedCourier.assignmentLocationSource
+    });
+
+    return updatedOrder;
   } catch (error) {
     console.error("[orders] auto assignment failed; keeping order pending", error);
     return null;
@@ -654,6 +942,10 @@ export async function assignCourierToOrder(orderId, courierId = null) {
   let nextStatus = currentOrder.status;
   let nextAssignedAt = currentOrder.assigned_at || null;
   let courierRecord = null;
+  let assignment = {
+    method: null,
+    distanceKm: null
+  };
 
   if (courierId) {
     courierRecord = await getCourierRecordById(courierId);
@@ -674,13 +966,17 @@ export async function assignCourierToOrder(orderId, courierId = null) {
     nextCourierId = courierRecord.id;
     nextStatus = "assigned";
     nextAssignedAt = new Date().toISOString();
+    assignment = {
+      method: "manual",
+      distanceKm: calculateCourierDistanceToOrder(currentOrder, courierRecord)
+    };
   } else {
     nextCourierId = null;
     nextAssignedAt = null;
     nextStatus = ["delivered", "cancelled"].includes(currentOrder.status) ? currentOrder.status : "pending";
   }
 
-  await updateOrderAssignment(orderId, nextCourierId, nextStatus, nextAssignedAt);
+  await updateOrderAssignment(orderId, nextCourierId, nextStatus, nextAssignedAt, assignment);
   const updatedOrder = await getOrderById(orderId);
 
   if (courierRecord) {
@@ -732,6 +1028,41 @@ export async function updateOrderStatus(orderId, status) {
   ensureSupabaseReady();
 
   const currentOrder = await getOrderRecordById(orderId);
+
+  if (status === "assigned" && !currentOrder.courier_id) {
+    const autoAssignedOrder = await autoAssignOrder(orderId, currentOrder);
+
+    if (autoAssignedOrder) {
+      try {
+        await notifyOperatorStatusChanged({
+          orderId,
+          status: autoAssignedOrder.status,
+          order: autoAssignedOrder
+        });
+      } catch (notificationError) {
+        console.error("[operator-notifications] status hook failed", notificationError);
+      }
+
+      return autoAssignedOrder;
+    }
+
+    const fallbackOrder = currentOrder.status === "pending"
+      ? await getOrderById(orderId)
+      : (await updateOrderRecordStatus(orderId, "pending"), await getOrderById(orderId));
+
+    try {
+      await notifyOperatorStatusChanged({
+        orderId,
+        status: fallbackOrder.status,
+        order: fallbackOrder
+      });
+    } catch (notificationError) {
+      console.error("[operator-notifications] status hook failed", notificationError);
+    }
+
+    return fallbackOrder;
+  }
+
   await updateOrderRecordStatus(orderId, status);
 
   const updatedOrder = await getOrderById(orderId);

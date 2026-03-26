@@ -229,6 +229,14 @@ export function getCouriers(filters = {}, options = {}) {
   return request(`/couriers${query ? `?${query}` : ""}`, options);
 }
 
+export function getAdminAnalytics(options = {}) {
+  return request("/admin/analytics", options);
+}
+
+export function getAdminCourierPerformance(options = {}) {
+  return request("/admin/courier-performance", options);
+}
+
 export function getCourierProfile(telegramUserId = null, options = {}) {
   return request("/couriers/me", {
     ...options,

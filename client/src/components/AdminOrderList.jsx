@@ -51,6 +51,11 @@ function AdminOrderList({ orders, selectedOrderId, onSelect }) {
               <span>
                 {order.courier?.fullName ? `Kuryer: ${order.courier.fullName}` : "Kuryer biriktirilmagan"}
               </span>
+              <span>
+                {order.assignmentMethod
+                  ? `${order.assignmentMethod === "auto" ? "Auto" : "Manual"}${order.assignmentDistanceKm !== null && order.assignmentDistanceKm !== undefined ? ` - ${Number(order.assignmentDistanceKm).toFixed(2)} km` : ""}`
+                  : "Assignment meta yo'q"}
+              </span>
             </div>
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">

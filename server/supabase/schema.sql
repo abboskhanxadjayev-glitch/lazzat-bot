@@ -61,6 +61,8 @@ alter table if exists public.couriers add column if not exists transport_color t
 alter table if exists public.couriers add column if not exists vehicle_brand text;
 alter table if exists public.couriers add column if not exists plate_number text;
 alter table if exists public.couriers add column if not exists password_hash text;
+alter table if exists public.couriers add column if not exists base_latitude double precision;
+alter table if exists public.couriers add column if not exists base_longitude double precision;
 
 alter table if exists public.orders add column if not exists courier_id uuid references public.couriers(id) on delete set null;
 alter table if exists public.orders add column if not exists assigned_at timestamptz;

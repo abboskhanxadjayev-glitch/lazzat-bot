@@ -189,6 +189,17 @@ function AdminOrderDetailCard({
               <p>
                 <span className="font-bold text-lazzat-maroon">Biriktirilgan vaqti:</span> {order.assignedAt ? formatDate(order.assignedAt) : "-"}
               </p>
+              <p>
+                <span className="font-bold text-lazzat-maroon">Usul:</span> {order.assignmentMethod === "auto" ? "Avtomatik" : order.assignmentMethod === "manual" ? "Qo'lda" : "-"}
+              </p>
+              <p>
+                <span className="font-bold text-lazzat-maroon">Biriktirish masofasi:</span> {order.assignmentDistanceKm !== null && order.assignmentDistanceKm !== undefined ? `${Number(order.assignmentDistanceKm).toFixed(2)} km` : "-"}
+              </p>
+              {order.assignment?.reason ? (
+                <p>
+                  <span className="font-bold text-lazzat-maroon">Sabab:</span> {order.assignment.reason}
+                </p>
+              ) : null}
             </div>
           ) : (
             <p>Hozircha kuryer biriktirilmagan.</p>

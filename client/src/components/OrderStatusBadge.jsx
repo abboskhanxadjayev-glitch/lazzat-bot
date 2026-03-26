@@ -1,5 +1,6 @@
 const STATUS_STYLES = {
   pending: "bg-amber-100 text-amber-800 border-amber-200",
+  assigned: "bg-cyan-100 text-cyan-800 border-cyan-200",
   accepted: "bg-blue-100 text-blue-800 border-blue-200",
   preparing: "bg-violet-100 text-violet-800 border-violet-200",
   ready_for_delivery: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
@@ -10,6 +11,7 @@ const STATUS_STYLES = {
 
 const STATUS_LABELS = {
   pending: "Kutilmoqda",
+  assigned: "Biriktirildi",
   accepted: "Qabul qilindi",
   preparing: "Tayyorlanmoqda",
   ready_for_delivery: "Yetkazishga tayyor",

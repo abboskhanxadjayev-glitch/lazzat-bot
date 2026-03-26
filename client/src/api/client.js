@@ -175,8 +175,8 @@ export function getMyOrders(telegramUserId = null, options = {}) {
   });
 }
 
-export function getCourierPortalOrders(authToken, options = {}) {
-  return request("/orders/my-orders", {
+export function getCourierAssignedOrders(authToken, options = {}) {
+  return request("/courier/orders", {
     ...options,
     headers: withCourierAuthHeaders(authToken, options.headers || {})
   });
@@ -191,6 +191,22 @@ export function updateOrderStatus(orderId, status, options = {}) {
     ...options,
     method: "PATCH",
     body: JSON.stringify({ status })
+  });
+}
+
+export function acceptCourierOrder(authToken, orderId, options = {}) {
+  return request(`/courier/orders/${orderId}/accept`, {
+    ...options,
+    method: "POST",
+    headers: withCourierAuthHeaders(authToken, options.headers || {})
+  });
+}
+
+export function deliverCourierOrder(authToken, orderId, options = {}) {
+  return request(`/courier/orders/${orderId}/deliver`, {
+    ...options,
+    method: "POST",
+    headers: withCourierAuthHeaders(authToken, options.headers || {})
   });
 }
 

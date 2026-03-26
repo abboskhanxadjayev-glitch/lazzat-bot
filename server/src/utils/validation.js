@@ -9,6 +9,7 @@ function normalizePlateNumber(value) {
 
 export const ORDER_STATUS_VALUES = [
   "pending",
+  "assigned",
   "accepted",
   "preparing",
   "ready_for_delivery",

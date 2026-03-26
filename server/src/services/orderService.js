@@ -3,12 +3,18 @@ import { supabase } from "../config/supabase.js";
 import { createAppError } from "../utils/appError.js";
 import { getDeliveryDetails } from "../utils/delivery.js";
 import { getProductsByIds } from "./catalogService.js";
-import { ensureCourierSchemaReady, isCourierSchemaError } from "./courierSchemaService.js";
+import {
+  ensureCourierProfileSchemaReady,
+  ensureCourierSchemaReady,
+  isCourierProfileSchemaError,
+  isCourierSchemaError
+} from "./courierSchemaService.js";
 import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
 import { sendOrderNotification } from "./telegramService.js";
 
 const BASE_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
-const ENHANCED_ORDER_SELECT_FIELDS = `${BASE_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, created_at, updated_at)`;
+const ENHANCED_ORDER_SELECT_FIELDS = `${BASE_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
+const ACTIVE_COURIER_ORDER_STATUSES = ["assigned", "accepted", "ready_for_delivery", "on_the_way"];
 
 const ORDER_ASSIGNMENT_SCHEMA_TTL_MS = 60_000;
 let orderAssignmentSchemaCache = {
@@ -147,6 +153,7 @@ function mapCourierRecord(courierRecord) {
     username: courierRecord.username || "",
     fullName: courierRecord.full_name,
     phone: courierRecord.phone || "",
+    onlineStatus: courierRecord.online_status || "offline",
     status: courierRecord.status,
     isActive: Boolean(courierRecord.is_active),
     createdAt: courierRecord.created_at || null,
@@ -243,11 +250,7 @@ async function persistOrderDeliveryFields(orderId, deliveryDetails) {
 
   if (error) {
     console.error("[orders] failed to persist delivery columns", error);
-    throw createAppError(
-      500,
-      "Order delivery fields could not be saved into public.orders.",
-      error
-    );
+    throw createAppError(500, "Order delivery fields could not be saved into public.orders.", error);
   }
 }
 
@@ -321,13 +324,17 @@ async function updateOrderRecordStatus(orderId, status) {
 async function getCourierRecordById(courierId) {
   const { data, error } = await supabase
     .from("couriers")
-    .select("id, telegram_user_id, username, full_name, phone, status, is_active, created_at, updated_at")
+    .select("id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at")
     .eq("id", courierId)
     .maybeSingle();
 
   if (error) {
     if (isCourierSchemaError(error)) {
       await ensureCourierSchemaReady();
+    }
+
+    if (isCourierProfileSchemaError(error)) {
+      await ensureCourierProfileSchemaReady();
     }
 
     throw createAppError(500, "Kuryer ma'lumotlarini yuklab bo'lmadi.", error);
@@ -338,6 +345,88 @@ async function getCourierRecordById(courierId) {
   }
 
   return data;
+}
+
+async function getEligibleCouriersForAssignment() {
+  await ensureCourierSchemaReady();
+  await ensureCourierProfileSchemaReady();
+
+  const { data, error } = await supabase
+    .from("couriers")
+    .select("id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at")
+    .eq("status", "approved")
+    .eq("is_active", true)
+    .eq("online_status", "online");
+
+  if (error) {
+    if (isCourierSchemaError(error)) {
+      await ensureCourierSchemaReady();
+    }
+
+    if (isCourierProfileSchemaError(error)) {
+      await ensureCourierProfileSchemaReady();
+    }
+
+    throw createAppError(500, "Online kuryerlarni yuklab bo'lmadi.", error);
+  }
+
+  return data || [];
+}
+
+function pickCourierForAssignment(couriers = []) {
+  if (!couriers.length) {
+    return null;
+  }
+
+  const randomIndex = Math.floor(Math.random() * couriers.length);
+  return couriers[randomIndex] || null;
+}
+
+async function updateOrderAssignment(orderId, courierId, status, assignedAt) {
+  const { error } = await supabase
+    .from("orders")
+    .update({
+      courier_id: courierId,
+      status,
+      assigned_at: assignedAt
+    })
+    .eq("id", orderId);
+
+  if (error) {
+    if (isOrderAssignmentSchemaError(error)) {
+      await ensureCourierSchemaReady();
+    }
+
+    throw createAppError(500, "Buyurtma biriktirish ma'lumotlarini saqlab bo'lmadi.", error);
+  }
+}
+
+async function autoAssignOrder(orderId) {
+  try {
+    const candidateCouriers = await getEligibleCouriersForAssignment();
+    const selectedCourier = pickCourierForAssignment(candidateCouriers);
+
+    if (!selectedCourier) {
+      console.log(`[orders] no approved online courier found for order ${orderId}; keeping pending status.`);
+      return null;
+    }
+
+    await updateOrderAssignment(orderId, selectedCourier.id, "assigned", new Date().toISOString());
+    console.log(`[orders] order ${orderId} auto-assigned to courier ${selectedCourier.id}`);
+    return selectedCourier;
+  } catch (error) {
+    console.error("[orders] auto assignment failed; keeping order pending", error);
+    return null;
+  }
+}
+
+function ensureOrderAssignedToCourier(orderRecord, courierId) {
+  if (!orderRecord.courier_id || orderRecord.courier_id !== courierId) {
+    throw createAppError(403, "Bu buyurtma sizga biriktirilmagan.", {
+      orderId: orderRecord.id,
+      courierId
+    });
+  }
 }
 
 function normalizeTelegramUserId(telegramUserId) {
@@ -368,9 +457,7 @@ export async function createOrder(payload) {
     });
   }
 
-  console.log(
-    `[orders] inserting Supabase order for ${payload.customerName} with ${items.length} item(s)`
-  );
+  console.log(`[orders] inserting Supabase order for ${payload.customerName} with ${items.length} item(s)`);
   console.log("[orders] delivery payload before insert", {
     customerLat: deliveryDetails.customerLat,
     customerLng: deliveryDetails.customerLng,
@@ -378,9 +465,7 @@ export async function createOrder(payload) {
     deliveryFee: deliveryDetails.deliveryFee
   });
 
-  const { data: order, error: orderError } = await insertOrder(
-    buildOrderPayload(payload, subtotalAmount, deliveryDetails)
-  );
+  const { data: order, error: orderError } = await insertOrder(buildOrderPayload(payload, subtotalAmount, deliveryDetails));
 
   if (orderError || !order) {
     console.error("[orders] insert into orders failed", orderError);
@@ -405,6 +490,7 @@ export async function createOrder(payload) {
   }
 
   await persistOrderDeliveryFields(order.id, deliveryDetails);
+  await autoAssignOrder(order.id);
 
   console.log(`[orders] Supabase order ${order.id} created successfully with delivery columns.`);
 
@@ -423,10 +509,7 @@ export async function createOrder(payload) {
       messageId: telegramResponse.messageId
     });
   } catch (telegramError) {
-    console.error(
-      `[telegram] failed to send notification for order ${createdOrder.id}`,
-      telegramError
-    );
+    console.error(`[telegram] failed to send notification for order ${createdOrder.id}`, telegramError);
     throw createAppError(502, "Order saved but Telegram notification failed.", {
       orderId: createdOrder.id,
       reason: telegramError.message
@@ -478,7 +561,7 @@ export async function getOrdersByCourierId(courierId) {
     .from("orders")
     .select(selectFields)
     .eq("courier_id", courierId)
-    .in("status", ["ready_for_delivery", "on_the_way"])
+    .in("status", ACTIVE_COURIER_ORDER_STATUSES)
     .order("created_at", { ascending: false })
     .limit(100));
 
@@ -501,41 +584,69 @@ export async function getOrderById(orderId) {
 export async function assignCourierToOrder(orderId, courierId = null) {
   ensureSupabaseReady();
   await ensureCourierSchemaReady();
+  await ensureCourierProfileSchemaReady();
 
-  await getOrderRecordById(orderId);
-
+  const currentOrder = await getOrderRecordById(orderId);
   let nextCourierId = null;
+  let nextStatus = currentOrder.status;
+  let nextAssignedAt = currentOrder.assigned_at || null;
 
   if (courierId) {
     const courierRecord = await getCourierRecordById(courierId);
 
-    if (courierRecord.status !== "approved" || !courierRecord.is_active) {
-      throw createAppError(400, "Faqat tasdiqlangan faol kuryerni biriktirish mumkin.", {
+    if (courierRecord.status !== "approved" || !courierRecord.is_active || courierRecord.online_status !== "online") {
+      throw createAppError(400, "Faqat online va tasdiqlangan faol kuryerni biriktirish mumkin.", {
         courierId,
         status: courierRecord.status,
-        isActive: courierRecord.is_active
+        isActive: courierRecord.is_active,
+        onlineStatus: courierRecord.online_status
       });
     }
 
     nextCourierId = courierRecord.id;
+    nextStatus = "assigned";
+    nextAssignedAt = new Date().toISOString();
+  } else {
+    nextCourierId = null;
+    nextAssignedAt = null;
+    nextStatus = ["delivered", "cancelled"].includes(currentOrder.status) ? currentOrder.status : "pending";
   }
 
-  const { error } = await supabase
-    .from("orders")
-    .update({
-      courier_id: nextCourierId,
-      assigned_at: nextCourierId ? new Date().toISOString() : null
-    })
-    .eq("id", orderId);
+  await updateOrderAssignment(orderId, nextCourierId, nextStatus, nextAssignedAt);
+  return getOrderById(orderId);
+}
 
-  if (error) {
-    if (isOrderAssignmentSchemaError(error)) {
-      await ensureCourierSchemaReady();
-    }
+export async function acceptCourierOrder(orderId, courierId) {
+  ensureSupabaseReady();
 
-    throw createAppError(500, "Buyurtmaga kuryer biriktirib bo'lmadi.", error);
+  const orderRecord = await getOrderRecordById(orderId);
+  ensureOrderAssignedToCourier(orderRecord, courierId);
+
+  if (!["assigned", "ready_for_delivery"].includes(orderRecord.status)) {
+    throw createAppError(400, "Faqat biriktirilgan buyurtmani qabul qilish mumkin.", {
+      orderId,
+      status: orderRecord.status
+    });
   }
 
+  await updateOrderRecordStatus(orderId, "accepted");
+  return getOrderById(orderId);
+}
+
+export async function deliverCourierOrder(orderId, courierId) {
+  ensureSupabaseReady();
+
+  const orderRecord = await getOrderRecordById(orderId);
+  ensureOrderAssignedToCourier(orderRecord, courierId);
+
+  if (!["accepted", "on_the_way"].includes(orderRecord.status)) {
+    throw createAppError(400, "Faqat qabul qilingan buyurtmani yetkazildi qilish mumkin.", {
+      orderId,
+      status: orderRecord.status
+    });
+  }
+
+  await updateOrderRecordStatus(orderId, "delivered");
   return getOrderById(orderId);
 }
 
@@ -559,4 +670,3 @@ export async function updateOrderStatus(orderId, status) {
 
   return updatedOrder;
 }
-

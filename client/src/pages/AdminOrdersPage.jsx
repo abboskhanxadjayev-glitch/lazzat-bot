@@ -137,7 +137,7 @@ function AdminOrdersPage() {
     return {
       totalOrders: orders.length,
       pendingCount: orders.filter((order) => order.status === "pending").length,
-      onTheWayCount: orders.filter((order) => order.status === "on_the_way").length,
+      assignedCount: orders.filter((order) => order.status === "assigned").length,
       deliveredCount: orders.filter((order) => order.status === "delivered").length,
       todayOrders: todayOrders.length,
       todayRevenue
@@ -145,7 +145,7 @@ function AdminOrdersPage() {
   }, [orders]);
 
   const approvedCouriers = useMemo(
-    () => couriers.filter((courier) => courier.status === "approved" && courier.isActive),
+    () => couriers.filter((courier) => courier.status === "approved" && courier.isActive && courier.onlineStatus === "online"),
     [couriers]
   );
 
@@ -265,8 +265,8 @@ function AdminOrdersPage() {
           <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.pendingCount}</p>
         </div>
         <div className="surface-card rounded-[28px] p-5">
-          <p className="section-label">Yo'lda</p>
-          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.onTheWayCount}</p>
+          <p className="section-label">Biriktirilgan</p>
+          <p className="mt-3 text-3xl font-bold text-lazzat-maroon">{stats.assignedCount}</p>
         </div>
         <div className="surface-card rounded-[28px] p-5">
           <p className="section-label">Yetkazildi</p>
@@ -379,4 +379,3 @@ function AdminOrdersPage() {
 }
 
 export default AdminOrdersPage;
-

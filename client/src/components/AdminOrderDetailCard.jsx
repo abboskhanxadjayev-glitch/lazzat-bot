@@ -135,7 +135,7 @@ function AdminOrderDetailCard({
           <div>
             <p className="section-label">Status boshqaruvi</p>
             <p className="mt-2 text-sm leading-6 text-lazzat-ink/70">
-              Buyurtma holatini yangilang. Kuryerga tayyor buyurtmalar uchun `Yetkazishga tayyor` yoki `Yo'lda` statusidan foydalaning.
+              Buyurtma holatini yangilang. Tizim online kuryer topsa buyurtmani avtomatik ravishda biriktiradi yoki siz qo'lda biriktirishingiz mumkin.
             </p>
           </div>
 
@@ -169,7 +169,7 @@ function AdminOrderDetailCard({
           <div>
             <p className="section-label">Kuryer biriktirish</p>
             <p className="mt-2 text-sm leading-6 text-lazzat-ink/70">
-              Tasdiqlangan kuryerni biriktiring, qayta biriktiring yoki kerak bo'lsa olib tashlang.
+              Faqat online va tasdiqlangan kuryerni biriktirish, qayta biriktirish yoki kerak bo'lsa olib tashlash mumkin.
             </p>
           </div>
         </div>

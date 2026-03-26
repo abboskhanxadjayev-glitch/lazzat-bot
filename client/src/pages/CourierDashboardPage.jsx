@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import {
-  getCourierPortalOrders,
+  acceptCourierOrder,
+  deliverCourierOrder,
+  getCourierAssignedOrders,
   getCourierPortalProfile,
-  updateCourierPortalOnlineStatus,
-  updateOrderStatus
+  updateCourierPortalOnlineStatus
 } from "../api/client";
 import LiveFeedStatus from "../components/LiveFeedStatus";
 import OrderStatusBadge from "../components/OrderStatusBadge";
@@ -56,7 +57,7 @@ function formatTransportLabel(courier) {
     parts.push(courier.plateNumber);
   }
 
-  return parts.join(" • ");
+  return parts.join(" - ");
 }
 
 function CourierDashboardPage() {
@@ -88,7 +89,7 @@ function CourierDashboardPage() {
 
   const fetchCourierOrders = useCallback(async ({ signal }) => {
     try {
-      return await getCourierPortalOrders(token, { signal });
+      return await getCourierAssignedOrders(token, { signal });
     } catch (error) {
       if (handleUnauthorized(error)) {
         return [];
@@ -125,7 +126,7 @@ function CourierDashboardPage() {
   });
 
   const activeOrders = useMemo(
-    () => orders.filter((order) => ["ready_for_delivery", "on_the_way"].includes(order.status)),
+    () => orders.filter((order) => ["assigned", "accepted", "ready_for_delivery", "on_the_way"].includes(order.status)),
     [orders]
   );
 
@@ -158,21 +159,24 @@ function CourierDashboardPage() {
   }, [courier, handleUnauthorized, setCourierProfile, token]);
 
   const handleOrderAction = useCallback(async (order) => {
-    const nextStatus = order.status === "ready_for_delivery" ? "on_the_way" : "delivered";
-
     setActiveOrderId(order.id);
     setStatusMessage("");
 
     try {
-      const updatedOrder = await updateOrderStatus(order.id, nextStatus);
+      const updatedOrder = ["assigned", "ready_for_delivery"].includes(order.status)
+        ? await acceptCourierOrder(token, order.id)
+        : await deliverCourierOrder(token, order.id);
       applyOrderPatch(updatedOrder);
     } catch (error) {
       console.error("[courier-dashboard] order status update error", error);
-      setStatusMessage(error.message || "Buyurtma statusini yangilab bo'lmadi.");
+
+      if (!handleUnauthorized(error)) {
+        setStatusMessage(error.message || "Buyurtma statusini yangilab bo'lmadi.");
+      }
     } finally {
       setActiveOrderId("");
     }
-  }, [applyOrderPatch]);
+  }, [applyOrderPatch, handleUnauthorized, token]);
 
   if (!isAuthenticated) {
     return <Navigate replace to="/courier-login" />;
@@ -229,7 +233,7 @@ function CourierDashboardPage() {
               <p className="text-xs uppercase tracking-[0.28em] text-white/60">Courier portal</p>
               <h1 className="mt-3 text-3xl font-bold">Lazzat Oshxonasi</h1>
               <p className="mt-2 text-sm leading-6 text-white/80">
-                Biriktirilgan yetkazmalar, online holat va tezkor xarita havolalari shu yerda.
+                Biriktirilgan buyurtmalar, online holat va tezkor xarita havolalari shu yerda.
               </p>
             </div>
             <button type="button" onClick={clearSession} className="rounded-full border border-white/20 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-white/85">
@@ -295,7 +299,7 @@ function CourierDashboardPage() {
         </section>
 
         {statusMessage ? (
-          <section className={`surface-card rounded-[28px] p-5 text-sm ${statusMessage.includes("o'tdingiz") ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-rose-200 bg-rose-50 text-rose-700"}`}>
+          <section className={`surface-card rounded-[28px] p-5 text-sm ${statusMessage.includes("o'tdingiz") || statusMessage.includes("qabul qilindi") || statusMessage.includes("yetkazildi") ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-rose-200 bg-rose-50 text-rose-700"}`}>
             {statusMessage}
           </section>
         ) : null}
@@ -328,7 +332,7 @@ function CourierDashboardPage() {
 
             {!ordersLoading && !ordersErrorMessage && !activeOrders.length ? (
               <section className="surface-card rounded-[28px] p-5 text-sm text-lazzat-ink/70">
-                Hozircha sizga biriktirilgan faol yetkazmalar yo'q.
+                Hozircha sizga biriktirilgan faol buyurtmalar yo'q.
               </section>
             ) : null}
 
@@ -339,13 +343,13 @@ function CourierDashboardPage() {
                   const mapUrl = hasCoordinates
                     ? `https://www.google.com/maps?q=${order.customerLat},${order.customerLng}`
                     : null;
-                  const actionLabel = order.status === "ready_for_delivery" ? "Yo'lga chiqdi" : "Yetkazildi";
+                  const actionLabel = ["assigned", "ready_for_delivery"].includes(order.status) ? "Qabul qilish" : "Yetkazildi";
 
                   return (
                     <section key={order.id} className="surface-card space-y-4 rounded-[30px] p-5">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
-                          <p className="section-label">Yetkazma</p>
+                          <p className="section-label">Buyurtma</p>
                           <h2 className="mt-2 text-xl font-bold text-lazzat-maroon">{order.customerName}</h2>
                           <p className="mt-1 text-sm text-lazzat-ink/70">{order.phone}</p>
                           <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-lazzat-red/60">
@@ -381,6 +385,28 @@ function CourierDashboardPage() {
                             </p>
                           </>
                         ) : null}
+                      </div>
+
+                      <div className="rounded-[24px] border border-lazzat-gold/15 bg-lazzat-cream/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="section-label">Mahsulotlar</p>
+                          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-lazzat-red/60">
+                            {order.items.length} ta
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-3">
+                          {order.items.map((item) => (
+                            <div key={item.id || `${item.productId}-${item.productName}`} className="rounded-[20px] border border-white/70 bg-white/75 p-3">
+                              <p className="text-sm font-bold text-lazzat-maroon">{item.productName}</p>
+                              <p className="mt-1 text-sm text-lazzat-ink/70">
+                                {item.quantity} x {formatCurrency(item.unitPrice)}
+                              </p>
+                              <p className="mt-1 text-sm font-semibold text-lazzat-maroon">
+                                {formatCurrency(item.lineTotal)}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-2">

@@ -1,19 +1,24 @@
 import { env } from "../config/env.js";
 
 let hasLoggedTelegramStatus = false;
+const DEFAULT_COURIER_DASHBOARD_URL = "https://client-chi-nine-98.vercel.app/courier-dashboard";
 
 function isPlaceholderValue(value) {
-  return value.includes("your-telegram-bot-token") || value.includes("your-telegram-chat-id");
+  return (
+    value.includes("your-telegram-bot-token")
+    || value.includes("your-telegram-chat-id")
+    || value.includes("your-mini-app-url")
+  );
 }
 
 function getTelegramConfig() {
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || env.telegramBotToken || "";
   const telegramChatId = process.env.TELEGRAM_CHAT_ID || env.telegramChatId || "";
   const hasTelegramNotifications = Boolean(
-    telegramBotToken &&
-    telegramChatId &&
-    !isPlaceholderValue(telegramBotToken) &&
-    !isPlaceholderValue(telegramChatId)
+    telegramBotToken
+    && telegramChatId
+    && !isPlaceholderValue(telegramBotToken)
+    && !isPlaceholderValue(telegramChatId)
   );
 
   return {
@@ -25,6 +30,43 @@ function getTelegramConfig() {
 
 function buildItemsList(items) {
   return items.map((item) => `${item.productName} x${item.quantity}`).join(", ");
+}
+
+function formatTelegramMoney(value) {
+  const amount = Number(value || 0);
+
+  if (!Number.isFinite(amount)) {
+    return "0";
+  }
+
+  return String(Math.round(amount));
+}
+
+function getCourierDashboardUrl() {
+  const configuredBaseUrl = (process.env.MINI_APP_URL || "").trim();
+
+  if (configuredBaseUrl && !isPlaceholderValue(configuredBaseUrl)) {
+    return `${configuredBaseUrl.replace(/\/+$/, "")}/courier-dashboard`;
+  }
+
+  return DEFAULT_COURIER_DASHBOARD_URL;
+}
+
+function buildInlineKeyboard(buttonRows = []) {
+  const inlineKeyboard = buttonRows
+    .map((row) => row.filter(Boolean).map((button) => ({
+      text: button.text,
+      url: button.url
+    })))
+    .filter((row) => row.length);
+
+  if (!inlineKeyboard.length) {
+    return undefined;
+  }
+
+  return {
+    inline_keyboard: inlineKeyboard
+  };
 }
 
 export function logTelegramConfiguration() {
@@ -51,7 +93,7 @@ export function logTelegramConfiguration() {
   console.log(`[telegram] order notifications enabled for chat ${telegramChatId}`);
 }
 
-export async function sendTelegramMessage({ chatId, text }) {
+export async function sendTelegramMessage({ chatId, text, buttons = [] }) {
   const { telegramBotToken } = getTelegramConfig();
 
   if (!telegramBotToken || isPlaceholderValue(telegramBotToken)) {
@@ -67,7 +109,9 @@ export async function sendTelegramMessage({ chatId, text }) {
     },
     body: JSON.stringify({
       chat_id: chatId,
-      text
+      text,
+      disable_web_page_preview: true,
+      reply_markup: buildInlineKeyboard(buttons)
     })
   });
 
@@ -108,9 +152,9 @@ export async function sendOrderNotification({ orderId, totalAmount, items }) {
   }
 
   const message = [
-    "🆕 Yangi buyurtma",
+    "\u{1F195} Yangi buyurtma",
     `ID: ${orderId}`,
-    `Summa: ${totalAmount}`,
+    `Summa: ${formatTelegramMoney(totalAmount)}`,
     `Mahsulotlar: ${buildItemsList(items)}`
   ].join("\n");
 
@@ -124,9 +168,37 @@ export async function sendOrderNotification({ orderId, totalAmount, items }) {
   return telegramResponse;
 }
 
+export async function sendCourierAssignmentNotification({ chatId, order }) {
+  const mapUrl = order.customerLat !== null && order.customerLng !== null
+    ? `https://maps.google.com/?q=${order.customerLat},${order.customerLng}`
+    : null;
+  const dashboardUrl = getCourierDashboardUrl();
+  const distanceText = order.deliveryDistanceKm === null || order.deliveryDistanceKm === undefined
+    ? "Noma'lum"
+    : Number(order.deliveryDistanceKm).toFixed(2);
+  const message = [
+    "\u{1F680} Yangi buyurtma!",
+    `Manzil: ${order.address}`,
+    `Masofa: ${distanceText} km`,
+    `Summa: ${formatTelegramMoney(order.totalAmount)} UZS`,
+    "",
+    "\u{1F449} Panelni ochish:",
+    dashboardUrl
+  ].join("\n");
+
+  return sendTelegramMessage({
+    chatId,
+    text: message,
+    buttons: [[
+      mapUrl ? { text: "Xaritada ochish", url: mapUrl } : null,
+      { text: "Panelni ochish", url: dashboardUrl }
+    ]]
+  });
+}
+
 export async function sendCourierApprovedLoginMessage({ telegramUserId, temporaryPassword = null, loginUrl }) {
   const lines = [
-    "✅ Siz tasdiqlandingiz.",
+    "\u2705 Siz tasdiqlandingiz.",
     "Kuryer panelga kirish uchun quyidagi linkdan foydalaning:",
     "",
     loginUrl

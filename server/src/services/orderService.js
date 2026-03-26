@@ -10,7 +10,7 @@ import {
   isCourierSchemaError
 } from "./courierSchemaService.js";
 import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
-import { sendOrderNotification } from "./telegramService.js";
+import { sendCourierAssignmentNotification, sendOrderNotification } from "./telegramService.js";
 
 const BASE_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
 const ENHANCED_ORDER_SELECT_FIELDS = `${BASE_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
@@ -403,6 +403,12 @@ async function updateOrderAssignment(orderId, courierId, status, assignedAt) {
 
 async function autoAssignOrder(orderId) {
   try {
+    const currentOrder = await getOrderRecordById(orderId);
+
+    if (currentOrder.courier_id && currentOrder.status === "assigned") {
+      return mapCourierRecord(currentOrder.courier || null);
+    }
+
     const candidateCouriers = await getEligibleCouriersForAssignment();
     const selectedCourier = pickCourierForAssignment(candidateCouriers);
 
@@ -411,7 +417,14 @@ async function autoAssignOrder(orderId) {
       return null;
     }
 
-    await updateOrderAssignment(orderId, selectedCourier.id, "assigned", new Date().toISOString());
+    const assignedAt = new Date().toISOString();
+    await updateOrderAssignment(orderId, selectedCourier.id, "assigned", assignedAt);
+    const updatedOrder = await getOrderById(orderId);
+    await maybeNotifyCourierAssigned({
+      previousOrder: currentOrder,
+      nextOrder: updatedOrder,
+      courierRecord: selectedCourier
+    });
     console.log(`[orders] order ${orderId} auto-assigned to courier ${selectedCourier.id}`);
     return selectedCourier;
   } catch (error) {
@@ -437,6 +450,56 @@ function normalizeTelegramUserId(telegramUserId) {
   }
 
   return parsedTelegramUserId;
+}
+
+async function maybeNotifyCourierAssigned({ previousOrder = null, nextOrder, courierRecord = null }) {
+  if (!nextOrder || nextOrder.status !== "assigned" || !nextOrder.courierId) {
+    return null;
+  }
+
+  const previousCourierId = previousOrder?.courier_id ?? previousOrder?.courierId ?? null;
+  const previousStatus = previousOrder?.status ?? null;
+  const previousAssignedAt = previousOrder?.assigned_at ?? previousOrder?.assignedAt ?? null;
+
+  if (
+    previousStatus === "assigned"
+    && previousCourierId === nextOrder.courierId
+    && previousAssignedAt === nextOrder.assignedAt
+  ) {
+    return null;
+  }
+
+  const resolvedCourier = courierRecord
+    ? mapCourierRecord(courierRecord)
+    : (nextOrder.courier || mapCourierRecord(await getCourierRecordById(nextOrder.courierId)));
+
+  if (!resolvedCourier?.telegramUserId) {
+    console.warn(`[telegram] assigned courier ${nextOrder.courierId} has no telegram user id; skipping assignment notification.`);
+    return null;
+  }
+
+  try {
+    const telegramResponse = await sendCourierAssignmentNotification({
+      chatId: resolvedCourier.telegramUserId,
+      order: nextOrder
+    });
+
+    console.log("[telegram] courier assignment notification result", {
+      orderId: nextOrder.id,
+      courierId: nextOrder.courierId,
+      messageId: telegramResponse.messageId
+    });
+
+    return telegramResponse;
+  } catch (error) {
+    console.error("[telegram] failed to send courier assignment notification", {
+      orderId: nextOrder.id,
+      courierId: nextOrder.courierId,
+      reason: error.message
+    });
+
+    return null;
+  }
 }
 
 export async function createOrder(payload) {
@@ -590,9 +653,10 @@ export async function assignCourierToOrder(orderId, courierId = null) {
   let nextCourierId = null;
   let nextStatus = currentOrder.status;
   let nextAssignedAt = currentOrder.assigned_at || null;
+  let courierRecord = null;
 
   if (courierId) {
-    const courierRecord = await getCourierRecordById(courierId);
+    courierRecord = await getCourierRecordById(courierId);
 
     if (courierRecord.status !== "approved" || !courierRecord.is_active || courierRecord.online_status !== "online") {
       throw createAppError(400, "Faqat online va tasdiqlangan faol kuryerni biriktirish mumkin.", {
@@ -601,6 +665,10 @@ export async function assignCourierToOrder(orderId, courierId = null) {
         isActive: courierRecord.is_active,
         onlineStatus: courierRecord.online_status
       });
+    }
+
+    if (currentOrder.courier_id === courierRecord.id && currentOrder.status === "assigned") {
+      return getOrderById(orderId);
     }
 
     nextCourierId = courierRecord.id;
@@ -613,7 +681,17 @@ export async function assignCourierToOrder(orderId, courierId = null) {
   }
 
   await updateOrderAssignment(orderId, nextCourierId, nextStatus, nextAssignedAt);
-  return getOrderById(orderId);
+  const updatedOrder = await getOrderById(orderId);
+
+  if (courierRecord) {
+    await maybeNotifyCourierAssigned({
+      previousOrder: currentOrder,
+      nextOrder: updatedOrder,
+      courierRecord
+    });
+  }
+
+  return updatedOrder;
 }
 
 export async function acceptCourierOrder(orderId, courierId) {
@@ -653,10 +731,17 @@ export async function deliverCourierOrder(orderId, courierId) {
 export async function updateOrderStatus(orderId, status) {
   ensureSupabaseReady();
 
-  await getOrderRecordById(orderId);
+  const currentOrder = await getOrderRecordById(orderId);
   await updateOrderRecordStatus(orderId, status);
 
   const updatedOrder = await getOrderById(orderId);
+
+  if (status === "assigned" && updatedOrder.courierId) {
+    await maybeNotifyCourierAssigned({
+      previousOrder: currentOrder,
+      nextOrder: updatedOrder
+    });
+  }
 
   try {
     await notifyOperatorStatusChanged({

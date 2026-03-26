@@ -2,10 +2,10 @@ import { createHash } from "crypto";
 import { Markup, Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
 import { env } from "../config/env.js";
+import { ensureCourierLoginCredentials } from "./courierAuthService.js";
 import {
   ensureCourierRegistrationRecord,
   getCourierProfileByTelegramUserId,
-  updateCourierOnlineStatus,
   updateCourierProfile
 } from "./courierService.js";
 
@@ -14,17 +14,19 @@ const DEFAULT_PRODUCTION_WEBHOOK_BASE_URL = "https://lazzat-bot.onrender.com";
 const TELEGRAM_WEBHOOK_PATH = "/api/telegram/webhook";
 const ORDER_BUTTON_LABEL = "\u{1F354} Buyurtma berish";
 const COURIER_BUTTON_LABEL = "\u{1F69A} Kuryer bo'lish";
-const OPEN_COURIER_PANEL_LABEL = "\u{1F69A} Courier panelni ochish";
-const ONLINE_BUTTON_LABEL = "\u{1F7E2} Online bo'lish";
-const OFFLINE_BUTTON_LABEL = "\u26AA Offline bo'lish";
+const LEGACY_OPEN_COURIER_PANEL_LABEL = "\u{1F69A} Courier panelni ochish";
+const LEGACY_ONLINE_BUTTON_LABEL = "\u{1F7E2} Online bo'lish";
+const LEGACY_OFFLINE_BUTTON_LABEL = "\u26AA Offline bo'lish";
 const SHARE_CONTACT_LABEL = "\u{1F4F1} Telefonni ulashish";
 const CANCEL_BUTTON_LABEL = "\u2B05 Bekor qilish";
 const PHONE_PATTERN = /^[+]?[-()\d\s]{7,20}$/;
 const UZBEK_PLATE_PATTERN = /^(?:\d{2}\s?[A-Z]\s?\d{3}\s?[A-Z]{2}|\d{2}\s?\d{3}\s?[A-Z]{3})$/i;
 const RESERVED_TEXT_BUTTONS = new Set([
+  ORDER_BUTTON_LABEL,
   COURIER_BUTTON_LABEL,
-  ONLINE_BUTTON_LABEL,
-  OFFLINE_BUTTON_LABEL,
+  LEGACY_OPEN_COURIER_PANEL_LABEL,
+  LEGACY_ONLINE_BUTTON_LABEL,
+  LEGACY_OFFLINE_BUTTON_LABEL,
   CANCEL_BUTTON_LABEL
 ]);
 const onboardingState = new Map();
@@ -47,11 +49,6 @@ const STATUS_LABELS = {
   pending: "Tasdiqlash kutilmoqda",
   approved: "Tasdiqlangan",
   blocked: "Bloklangan"
-};
-
-const ONLINE_STATUS_LABELS = {
-  online: "Online",
-  offline: "Offline"
 };
 
 const BOT_COMMANDS = [
@@ -81,7 +78,7 @@ function resolveBotConfig() {
   return {
     token,
     normalizedMiniAppUrl,
-    courierMiniAppUrl: `${normalizedMiniAppUrl}/courier`,
+    courierLoginUrl: `${normalizedMiniAppUrl}/courier-login`,
     webhookBaseUrl: configuredBaseUrl ? trimTrailingSlash(configuredBaseUrl) : ""
   };
 }
@@ -128,10 +125,6 @@ function formatCourierStatus(value) {
   return STATUS_LABELS[value] || value || "Ro'yxatdan o'tmagan";
 }
 
-function formatOnlineStatus(value) {
-  return ONLINE_STATUS_LABELS[value] || value || "Offline";
-}
-
 function getMainKeyboard(config) {
   return Markup.keyboard([
     [Markup.button.webApp(ORDER_BUTTON_LABEL, config.normalizedMiniAppUrl)],
@@ -158,29 +151,6 @@ function getFreeTextKeyboard() {
   return Markup.keyboard([
     [Markup.button.text(CANCEL_BUTTON_LABEL)]
   ]).resize().oneTime();
-}
-
-function getCourierPanelKeyboard(courier, config) {
-  const isApprovedCourier = courier?.status === "approved";
-  const toggleButtons = isApprovedCourier
-    ? [Markup.button.text(ONLINE_BUTTON_LABEL), Markup.button.text(OFFLINE_BUTTON_LABEL)]
-    : [];
-
-  const rows = [
-    [Markup.button.webApp(OPEN_COURIER_PANEL_LABEL, config.courierMiniAppUrl)]
-  ];
-
-  if (toggleButtons.length) {
-    rows.push(toggleButtons);
-  }
-
-  rows.push(
-    isApprovedCourier
-      ? [Markup.button.text(ORDER_BUTTON_LABEL)]
-      : [Markup.button.text(ORDER_BUTTON_LABEL), Markup.button.text(COURIER_BUTTON_LABEL)]
-  );
-
-  return Markup.keyboard(rows).resize();
 }
 
 function setOnboardingState(userId, nextState) {
@@ -236,8 +206,7 @@ function buildCourierSummary(courier) {
     `ID: ${courier.telegramUserId}`,
     `Holat: ${formatCourierStatus(courier.status)}`,
     `Telefon: ${courier.phone || "Kiritilmagan"}`,
-    `Transport: ${formatTransportType(courier.transportType)}`,
-    `Online: ${formatOnlineStatus(courier.onlineStatus)}`
+    `Transport: ${formatTransportType(courier.transportType)}`
   ];
 
   if (courier.transportColor) {
@@ -261,6 +230,7 @@ function getHelpText() {
     "",
     `- Buyurtma berish uchun: ${ORDER_BUTTON_LABEL}`,
     `- Kuryer onboardingi uchun: ${COURIER_BUTTON_LABEL}`,
+    "- Tasdiqlangan kuryerlarga web login havolasi yuboriladi.",
     "- Telegram ID ni ko'rish uchun: /myid"
   ].join("\n");
 }
@@ -274,12 +244,12 @@ function getApiErrorMessage(error, fallbackMessage) {
     return "Kuryer transport maydonlari hali tayyor emas. Iltimos, operator bilan bog'laning.";
   }
 
-  if (error?.details?.code === "COURIER_BLOCKED") {
-    return "Sizning kuryer profilingiz bloklangan. Operator bilan bog'laning.";
+  if (error?.details?.code === "COURIER_AUTH_SCHEMA_NOT_READY") {
+    return "Kuryer login maydonlari hali tayyor emas. Iltimos, operator bilan bog'laning.";
   }
 
-  if (error?.details?.code === "COURIER_NOT_APPROVED") {
-    return "Faqat tasdiqlangan kuryer online bo'la oladi.";
+  if (error?.details?.code === "COURIER_BLOCKED") {
+    return "Sizning kuryer profilingiz bloklangan. Operator bilan bog'laning.";
   }
 
   return error?.message || fallbackMessage;
@@ -303,6 +273,27 @@ async function loadCourierProfile(ctx) {
   return getCourierProfileByTelegramUserId(ctx.from.id);
 }
 
+async function buildCourierLoginReply(courier, config, messagePrefix = "") {
+  const { temporaryPassword } = await ensureCourierLoginCredentials(courier.id);
+  const lines = [
+    `${messagePrefix}✅ Siz tasdiqlangansiz.`,
+    buildCourierSummary(courier),
+    "",
+    "Kuryer panelga kirish uchun quyidagi linkdan foydalaning:",
+    config.courierLoginUrl,
+    "",
+    `Telefon: ${courier.phone}`
+  ];
+
+  if (temporaryPassword) {
+    lines.push(`Vaqtinchalik parol: ${temporaryPassword}`);
+  } else {
+    lines.push("Parolingiz avval yaratilgan. Agar unutgan bo'lsangiz, admin bilan bog'laning.");
+  }
+
+  return lines.join("\n");
+}
+
 async function finalizeCourierOnboarding(ctx, courier, profilePayload, config) {
   const updatedCourier = await updateCourierProfile(courier.id, {
     ...profilePayload,
@@ -312,7 +303,7 @@ async function finalizeCourierOnboarding(ctx, courier, profilePayload, config) {
   clearOnboardingState(ctx.from?.id);
   await ctx.reply(
     `Ro'yxatdan o'tish yakunlandi. Admin tasdiqlashi kerak.\n\n${buildCourierSummary(updatedCourier)}`,
-    getCourierPanelKeyboard(updatedCourier, config)
+    getMainKeyboard(config)
   );
 }
 
@@ -383,16 +374,19 @@ async function sendCourierEntryState(ctx, courier, config, options = {}) {
   }
 
   if (step === "approved") {
-    await ctx.reply(
-      `${messagePrefix}Siz tasdiqlangan kuryersiz.\n\n${buildCourierSummary(courier)}`,
-      getCourierPanelKeyboard(courier, config)
-    );
+    try {
+      const loginReply = await buildCourierLoginReply(courier, config, messagePrefix);
+      await ctx.reply(loginReply, getMainKeyboard(config));
+    } catch (error) {
+      console.error("[telegram-bot] failed to build courier login reply", error);
+      await ctx.reply(getApiErrorMessage(error, "Kuryer login ma'lumotlarini tayyorlab bo'lmadi."), getMainKeyboard(config));
+    }
     return;
   }
 
   await ctx.reply(
-    `${messagePrefix}Tasdiqlash kutilmoqda. Admin tasdiqlagach courier paneldan foydalanishingiz mumkin.\n\n${buildCourierSummary(courier)}`,
-    getCourierPanelKeyboard(courier, config)
+    `${messagePrefix}Tasdiqlash kutilmoqda. Admin tasdiqlagach sizga web login havolasi yuboriladi.\n\n${buildCourierSummary(courier)}`,
+    getMainKeyboard(config)
   );
 }
 
@@ -474,7 +468,7 @@ async function handleTransportSelection(ctx, transportType, config) {
   }
 }
 
-async function handleTransportColorInput(ctx, transportColor, config) {
+async function handleTransportColorInput(ctx, transportColor) {
   const userId = ctx.from?.id;
   const state = getOnboardingState(userId);
 
@@ -575,7 +569,19 @@ async function handlePlateNumberInput(ctx, plateNumber, config) {
   }
 }
 
-async function handleOnlineToggle(ctx, onlineStatus, config) {
+async function handleLegacyCourierPanelRequest(ctx, config) {
+  try {
+    const courier = await getOrCreateCourier(ctx);
+    await sendCourierEntryState(ctx, courier, config, {
+      messagePrefix: "Eski panel tugmasi o'rniga web login ishlatiladi.\n\n"
+    });
+  } catch (error) {
+    console.error("[telegram-bot] legacy courier panel request error", error);
+    await ctx.reply(getApiErrorMessage(error, "Kuryer panel ma'lumotlarini tayyorlab bo'lmadi."), getMainKeyboard(config));
+  }
+}
+
+async function handleLegacyOnlineToggle(ctx, config) {
   try {
     const courier = await loadCourierProfile(ctx);
 
@@ -584,15 +590,18 @@ async function handleOnlineToggle(ctx, onlineStatus, config) {
       return;
     }
 
-    const updatedCourier = await updateCourierOnlineStatus(courier.id, onlineStatus);
-    const messageText = onlineStatus === "online"
-      ? "Siz online holatga o'tdingiz."
-      : "Siz offline holatga o'tdingiz.";
+    if (courier.status === "approved") {
+      const loginReply = await buildCourierLoginReply(courier, config, "Online/offline holatini endi web panelda boshqaring.\n\n");
+      await ctx.reply(loginReply, getMainKeyboard(config));
+      return;
+    }
 
-    await ctx.reply(`${messageText}\n\n${buildCourierSummary(updatedCourier)}`, getCourierPanelKeyboard(updatedCourier, config));
+    await sendCourierEntryState(ctx, courier, config, {
+      messagePrefix: "Online/offline holati web panelga ko'chirildi.\n\n"
+    });
   } catch (error) {
-    console.error("[telegram-bot] online toggle error", error);
-    await ctx.reply(getApiErrorMessage(error, "Online holatini yangilab bo'lmadi."), getMainKeyboard(config));
+    console.error("[telegram-bot] legacy online toggle error", error);
+    await ctx.reply(getApiErrorMessage(error, "Kuryer holatini tekshirib bo'lmadi."), getMainKeyboard(config));
   }
 }
 
@@ -649,8 +658,9 @@ function createTelegramBot(config) {
     await ctx.reply("Buyurtma berish uchun Mini App tugmasidan foydalaning.", getMainKeyboard(config));
   });
   bot.hears(COURIER_BUTTON_LABEL, async (ctx) => handleCourierEntry(ctx, config));
-  bot.hears(ONLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "online", config));
-  bot.hears(OFFLINE_BUTTON_LABEL, async (ctx) => handleOnlineToggle(ctx, "offline", config));
+  bot.hears(LEGACY_OPEN_COURIER_PANEL_LABEL, async (ctx) => handleLegacyCourierPanelRequest(ctx, config));
+  bot.hears(LEGACY_ONLINE_BUTTON_LABEL, async (ctx) => handleLegacyOnlineToggle(ctx, config));
+  bot.hears(LEGACY_OFFLINE_BUTTON_LABEL, async (ctx) => handleLegacyOnlineToggle(ctx, config));
   bot.hears(CANCEL_BUTTON_LABEL, async (ctx) => {
     clearOnboardingState(ctx.from?.id);
     await ctx.reply("Kuryer onboardingi bekor qilindi.", getMainKeyboard(config));
@@ -692,7 +702,7 @@ function createTelegramBot(config) {
     }
 
     if (state.step === "transport_color") {
-      await handleTransportColorInput(ctx, text, config);
+      await handleTransportColorInput(ctx, text);
       return;
     }
 

@@ -1,8 +1,9 @@
-import cors from "cors";
+﻿import cors from "cors";
 import express from "express";
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
+import courierAuthRoutes from "./routes/courierAuthRoutes.js";
 import courierRoutes from "./routes/courierRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
@@ -30,6 +31,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/categories", categoryRoutes);
 app.use("/api/products", productRoutes);
+app.use("/api/courier", courierAuthRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/couriers", courierRoutes);
 

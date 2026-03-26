@@ -108,6 +108,15 @@ export const registerCourierSchema = z.object({
   telegramUser: telegramUserSchema
 });
 
+export const courierLoginSchema = z.object({
+  phone: z.string().trim().regex(phonePattern, "Telefon raqami noto'g'ri formatda."),
+  password: z.string().trim().min(6, "Parol kamida 6 ta belgidan iborat bo'lishi kerak.").max(128)
+});
+
+export const setCourierPasswordSchema = z.object({
+  password: z.string().trim().min(6, "Parol kamida 6 ta belgidan iborat bo'lishi kerak.").max(128)
+});
+
 export const updateCourierProfileSchema = z
   .object({
     fullName: z.string().trim().min(2, "F.I.Sh. kamida 2 ta belgidan iborat bo'lishi kerak.").max(120).optional(),

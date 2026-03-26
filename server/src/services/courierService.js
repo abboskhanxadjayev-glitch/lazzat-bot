@@ -64,6 +64,10 @@ function normalizeOptionalText(value) {
   return normalizedValue ? normalizedValue : null;
 }
 
+function normalizeCourierPhone(phone) {
+  return phone.trim();
+}
+
 function normalizePlateNumber(value) {
   if (value === undefined) {
     return undefined;
@@ -309,6 +313,34 @@ async function getCourierRecordByTelegramUserId(telegramUserId) {
   return data;
 }
 
+async function assertCourierPhoneAvailable(phone, excludeCourierId = null) {
+  const normalizedPhone = normalizeCourierPhone(phone);
+  const { data, error } = await supabase
+    .from("couriers")
+    .select("id")
+    .eq("phone", normalizedPhone)
+    .limit(1);
+
+  if (error) {
+    if (isCourierSchemaError(error)) {
+      await ensureCourierSchemaReady();
+    }
+
+    throw createAppError(500, "Kuryer telefonini tekshirib bo'lmadi.", error);
+  }
+
+  const existingRecord = (data || []).find((item) => item.id !== excludeCourierId);
+
+  if (existingRecord) {
+    throw createAppError(409, "Bu telefon raqami boshqa kuryerga biriktirilgan.", {
+      code: "COURIER_PHONE_TAKEN",
+      phone: normalizedPhone
+    });
+  }
+
+  return normalizedPhone;
+}
+
 async function getCourierProfileFieldsAvailable() {
   return hasCourierProfileSchema();
 }
@@ -433,9 +465,10 @@ export async function registerCourier(payload) {
   const profileFieldsAvailable = await getCourierProfileFieldsAvailable();
   const vehicleFieldsAvailable = profileFieldsAvailable ? await getCourierVehicleFieldsAvailable() : false;
   const mergedProfile = buildMergedCourierProfile(existingCourier, payload);
+  const normalizedPhone = await assertCourierPhoneAvailable(payload.phone, existingCourier?.id || null);
   const courierPayload = {
     ...buildCourierIdentityPayload({ existingCourier, telegramUser: payload.telegramUser, fullName }),
-    phone: payload.phone.trim(),
+    phone: normalizedPhone,
     status: existingCourier?.status || "pending",
     is_active: existingCourier ? Boolean(existingCourier.is_active) : false
   };
@@ -474,7 +507,7 @@ export async function updateCourierProfile(courierId, payload) {
   }
 
   if (payload.phone !== undefined) {
-    updatePayload.phone = payload.phone.trim();
+    updatePayload.phone = await assertCourierPhoneAvailable(payload.phone, existingCourier.id);
   }
 
   const touchesProfileFields = payload.transportType !== undefined || payload.submitForApproval === true;

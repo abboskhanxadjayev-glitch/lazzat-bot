@@ -1,4 +1,4 @@
-import { supabase } from "../config/supabase.js";
+﻿import { supabase } from "../config/supabase.js";
 import { createAppError } from "../utils/appError.js";
 
 const SCHEMA_CACHE_TTL_MS = 60_000;
@@ -16,6 +16,12 @@ let courierProfileSchemaCache = {
 };
 
 let courierVehicleSchemaCache = {
+  ready: null,
+  checkedAt: 0,
+  reason: ""
+};
+
+let courierAuthSchemaCache = {
   ready: null,
   checkedAt: 0,
   reason: ""
@@ -47,6 +53,14 @@ export const COURIER_VEHICLE_SCHEMA_DETAILS = {
     "public.couriers.vehicle_brand",
     "public.couriers.plate_number"
   ]
+};
+
+export const COURIER_AUTH_SCHEMA_DETAILS = {
+  code: "COURIER_AUTH_SCHEMA_NOT_READY",
+  migrationFile: "server/supabase/migrations/20260326_add_courier_auth_fields.sql",
+  schemaFile: "server/supabase/schema.sql",
+  requiredTables: ["public.couriers"],
+  requiredColumns: ["public.couriers.password_hash"]
 };
 
 function isSchemaCacheFresh(cache) {
@@ -105,6 +119,21 @@ export function isCourierVehicleSchemaError(error) {
   );
 }
 
+export function isCourierAuthSchemaError(error) {
+  if (!error) {
+    return false;
+  }
+
+  const errorCode = error.code || "";
+  const errorMessage = error.message || "";
+
+  return (
+    errorCode === "42703"
+    || errorCode === "PGRST200"
+    || errorMessage.includes("password_hash")
+  );
+}
+
 export function createCourierSchemaNotReadyError(reason = "Courier schema has not been applied yet.") {
   return createAppError(
     503,
@@ -133,6 +162,17 @@ export function createCourierVehicleSchemaNotReadyError(reason = "Courier vehicl
     "Kuryer transport maydonlari hali tayyor emas. Yangi courier vehicle migratsiyasini Supabase bazasiga qo'llash kerak.",
     {
       ...COURIER_VEHICLE_SCHEMA_DETAILS,
+      reason
+    }
+  );
+}
+
+export function createCourierAuthSchemaNotReadyError(reason = "Courier auth fields are not ready yet.") {
+  return createAppError(
+    503,
+    "Courier login maydonlari hali tayyor emas. Yangi courier auth migratsiyasini Supabase bazasiga qo'llash kerak.",
+    {
+      ...COURIER_AUTH_SCHEMA_DETAILS,
       reason
     }
   );
@@ -264,6 +304,42 @@ export async function ensureCourierVehicleSchemaReady() {
   return true;
 }
 
+export async function ensureCourierAuthSchemaReady() {
+  if (courierAuthSchemaCache.ready === true && isSchemaCacheFresh(courierAuthSchemaCache)) {
+    return true;
+  }
+
+  if (courierAuthSchemaCache.ready === false && isSchemaCacheFresh(courierAuthSchemaCache)) {
+    throw createCourierAuthSchemaNotReadyError(courierAuthSchemaCache.reason);
+  }
+
+  const authColumnsCheck = await supabase
+    .from("couriers")
+    .select("id,password_hash")
+    .limit(1);
+
+  if (authColumnsCheck.error) {
+    if (isCourierAuthSchemaError(authColumnsCheck.error)) {
+      courierAuthSchemaCache = {
+        ready: false,
+        checkedAt: Date.now(),
+        reason: authColumnsCheck.error.message
+      };
+      throw createCourierAuthSchemaNotReadyError(authColumnsCheck.error.message);
+    }
+
+    throw createAppError(500, "Courier auth schema tekshirib bo'lmadi.", authColumnsCheck.error);
+  }
+
+  courierAuthSchemaCache = {
+    ready: true,
+    checkedAt: Date.now(),
+    reason: "ready"
+  };
+
+  return true;
+}
+
 export async function hasCourierProfileSchema() {
   try {
     await ensureCourierProfileSchemaReady();
@@ -290,6 +366,19 @@ export async function hasCourierVehicleSchema() {
   }
 }
 
+export async function hasCourierAuthSchema() {
+  try {
+    await ensureCourierAuthSchemaReady();
+    return true;
+  } catch (error) {
+    if (error?.details?.code === COURIER_AUTH_SCHEMA_DETAILS.code) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 export function resetCourierSchemaCache() {
   courierSchemaCache = {
     ready: null,
@@ -304,6 +393,12 @@ export function resetCourierSchemaCache() {
   };
 
   courierVehicleSchemaCache = {
+    ready: null,
+    checkedAt: 0,
+    reason: ""
+  };
+
+  courierAuthSchemaCache = {
     ready: null,
     checkedAt: 0,
     reason: ""

@@ -62,10 +62,9 @@ export function updateCourierProfile(courierId, payload) {
   });
 }
 
-export function updateCourierOnlineStatus(courierId, onlineStatus) {
-  return request(`/couriers/${courierId}/online-status`, {
-    method: "PATCH",
-    body: JSON.stringify({ onlineStatus })
+export function getCourierLoginAccess(courierId) {
+  return request(`/couriers/${courierId}/login-access`, {
+    method: "POST"
   });
 }
 

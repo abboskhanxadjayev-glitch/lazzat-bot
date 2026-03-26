@@ -1,4 +1,4 @@
-import { Router } from "express";
+﻿import { Router } from "express";
 import {
   assignCourierToOrder,
   createOrder,
@@ -7,8 +7,10 @@ import {
   getOrdersByTelegramUserId,
   updateOrderStatus
 } from "../services/orderService.js";
+import { getCourierOrdersByIdForPortal } from "../services/courierAuthService.js";
 import { createAppError } from "../utils/appError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { tryResolveCourierAuth } from "../utils/courierAuth.js";
 import { resolveTelegramIdentity } from "../utils/telegramAuth.js";
 import {
   assignCourierSchema,
@@ -29,6 +31,14 @@ router.get(
 router.get(
   "/my-orders",
   asyncHandler(async (req, res) => {
+    const courierAuth = tryResolveCourierAuth(req.headers.authorization || "");
+
+    if (courierAuth) {
+      const orders = await getCourierOrdersByIdForPortal(courierAuth.courierId);
+      res.json({ data: orders });
+      return;
+    }
+
     const telegramIdentity = resolveTelegramIdentity(req);
     const orders = await getOrdersByTelegramUserId(telegramIdentity.telegramUserId);
     res.json({ data: orders });

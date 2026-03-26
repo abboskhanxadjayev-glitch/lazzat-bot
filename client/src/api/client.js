@@ -90,6 +90,17 @@ function withTelegramIdentityHeaders(telegramUserId, headers = {}) {
   };
 }
 
+function withCourierAuthHeaders(authToken, headers = {}) {
+  if (!authToken) {
+    return headers;
+  }
+
+  return {
+    ...headers,
+    Authorization: `Bearer ${authToken}`
+  };
+}
+
 const API_BASE_URL = resolveApiBaseUrl();
 const DEFAULT_TIMEOUT_MS = 12000;
 
@@ -164,6 +175,13 @@ export function getMyOrders(telegramUserId = null, options = {}) {
   });
 }
 
+export function getCourierPortalOrders(authToken, options = {}) {
+  return request("/orders/my-orders", {
+    ...options,
+    headers: withCourierAuthHeaders(authToken, options.headers || {})
+  });
+}
+
 export function getOrderById(orderId, options = {}) {
   return request(`/orders/${orderId}`, options);
 }
@@ -202,6 +220,13 @@ export function getCourierProfile(telegramUserId = null, options = {}) {
   });
 }
 
+export function getCourierPortalProfile(authToken, options = {}) {
+  return request("/couriers/me", {
+    ...options,
+    headers: withCourierAuthHeaders(authToken, options.headers || {})
+  });
+}
+
 export function getCourierOrders(telegramUserId = null, options = {}) {
   return request("/couriers/me/orders", {
     ...options,
@@ -222,6 +247,23 @@ export function updateCourierStatus(courierId, status, options = {}) {
     ...options,
     method: "PATCH",
     body: JSON.stringify({ status })
+  });
+}
+
+export function loginCourier(credentials, options = {}) {
+  return request("/courier/login", {
+    ...options,
+    method: "POST",
+    body: JSON.stringify(credentials)
+  });
+}
+
+export function updateCourierPortalOnlineStatus(authToken, onlineStatus, options = {}) {
+  return request("/couriers/online", {
+    ...options,
+    method: "PATCH",
+    headers: withCourierAuthHeaders(authToken, options.headers || {}),
+    body: JSON.stringify({ onlineStatus })
   });
 }
 

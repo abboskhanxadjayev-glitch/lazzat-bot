@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCourierProfile } from "../api/client";
 import { getSupabaseBrowserClient, hasSupabaseRealtimeConfig } from "../utils/supabaseBrowser";
 
 const POLLING_INTERVAL_MS = 5000;
 const REALTIME_REFRESH_DEBOUNCE_MS = 400;
 const COURIER_REALTIME_TABLES = [{ schema: "public", table: "couriers" }];
 
-export function useLiveCourierProfile({ telegramUserId = null, enabled = true }) {
+export function useLiveCourierProfile({ fetchCourier, enabled = true, channelKey = "courier-profile-live" }) {
   const [courier, setCourier] = useState(null);
   const [isInitialLoading, setIsInitialLoading] = useState(Boolean(enabled));
   const [error, setError] = useState(null);
@@ -39,7 +38,7 @@ export function useLiveCourierProfile({ telegramUserId = null, enabled = true })
   }, []);
 
   const runFetch = useCallback(async ({ showLoading = false } = {}) => {
-    if (!mountedRef.current || !enabled) {
+    if (!mountedRef.current || !enabled || typeof fetchCourier !== "function") {
       return;
     }
 
@@ -58,7 +57,7 @@ export function useLiveCourierProfile({ telegramUserId = null, enabled = true })
     }
 
     try {
-      const nextCourier = await getCourierProfile(telegramUserId, { signal: controller.signal });
+      const nextCourier = await fetchCourier({ signal: controller.signal });
 
       if (!mountedRef.current || controller.signal.aborted) {
         return;
@@ -73,7 +72,7 @@ export function useLiveCourierProfile({ telegramUserId = null, enabled = true })
         return;
       }
 
-      console.error("[courier-profile] fetch error", requestError);
+      console.error(`[${channelKey}] courier profile fetch error`, requestError);
 
       if (!hasLoadedOnceRef.current) {
         setError(requestError);
@@ -97,7 +96,7 @@ export function useLiveCourierProfile({ telegramUserId = null, enabled = true })
         }, 0);
       }
     }
-  }, [enabled, telegramUserId]);
+  }, [channelKey, enabled, fetchCourier]);
 
   const scheduleRefresh = useCallback(() => {
     if (!mountedRef.current || !enabled) {
@@ -122,10 +121,11 @@ export function useLiveCourierProfile({ telegramUserId = null, enabled = true })
   useEffect(() => {
     mountedRef.current = true;
 
-    if (!enabled) {
+    if (!enabled || typeof fetchCourier !== "function") {
       setCourier(null);
       setError(null);
       setIsInitialLoading(false);
+      setLiveMode(hasSupabaseRealtimeConfig ? "connecting" : "polling");
       return () => {
         mountedRef.current = false;
       };
@@ -145,9 +145,8 @@ export function useLiveCourierProfile({ telegramUserId = null, enabled = true })
     } else {
       cleanupRealtimeChannels();
 
-      const channelSuffix = telegramUserId || "telegram";
       const channels = COURIER_REALTIME_TABLES.map((tableConfig, index) => supabase
-        .channel(`courier-profile-${channelSuffix}-${index}-${Math.random().toString(36).slice(2)}`)
+        .channel(`${channelKey}-${index}-${Math.random().toString(36).slice(2)}`)
         .on(
           "postgres_changes",
           {
@@ -184,7 +183,7 @@ export function useLiveCourierProfile({ telegramUserId = null, enabled = true })
       fetchStateRef.current.controller?.abort();
       cleanupRealtimeChannels();
     };
-  }, [cleanupRealtimeChannels, enabled, runFetch, scheduleRealtimeRefresh, scheduleRefresh, telegramUserId]);
+  }, [channelKey, cleanupRealtimeChannels, enabled, fetchCourier, runFetch, scheduleRealtimeRefresh, scheduleRefresh]);
 
   const setCourierProfile = useCallback((nextCourier) => {
     setCourier(nextCourier);

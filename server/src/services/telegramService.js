@@ -34,7 +34,12 @@ export function logTelegramConfiguration() {
 
   hasLoggedTelegramStatus = true;
 
-  const { telegramChatId, hasTelegramNotifications } = getTelegramConfig();
+  const { telegramChatId, telegramBotToken, hasTelegramNotifications } = getTelegramConfig();
+
+  if (!telegramBotToken || isPlaceholderValue(telegramBotToken)) {
+    console.warn("[telegram] bot token missing: fix server/.env TELEGRAM_BOT_TOKEN or BOT_TOKEN.");
+    return;
+  }
 
   if (!hasTelegramNotifications) {
     console.warn(
@@ -46,21 +51,12 @@ export function logTelegramConfiguration() {
   console.log(`[telegram] order notifications enabled for chat ${telegramChatId}`);
 }
 
-export async function sendOrderNotification({ orderId, totalAmount, items }) {
-  const { telegramBotToken, telegramChatId, hasTelegramNotifications } = getTelegramConfig();
+export async function sendTelegramMessage({ chatId, text }) {
+  const { telegramBotToken } = getTelegramConfig();
 
-  if (!hasTelegramNotifications) {
-    throw new Error(
-      "Telegram notifications are not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."
-    );
+  if (!telegramBotToken || isPlaceholderValue(telegramBotToken)) {
+    throw new Error("Telegram bot token is not configured.");
   }
-
-  const message = [
-    "\uD83C\uDD95 Yangi buyurtma",
-    `ID: ${orderId}`,
-    `Summa: ${totalAmount}`,
-    `Mahsulotlar: ${buildItemsList(items)}`
-  ].join("\n");
 
   console.log("Sending Telegram message...");
 
@@ -70,8 +66,8 @@ export async function sendOrderNotification({ orderId, totalAmount, items }) {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      chat_id: telegramChatId,
-      text: message
+      chat_id: chatId,
+      text
     })
   });
 
@@ -95,11 +91,53 @@ export async function sendOrderNotification({ orderId, totalAmount, items }) {
     throw new Error(`Telegram sendMessage failed: ${reason}`);
   }
 
-  console.log(`[telegram] order ${orderId} notification sent successfully.`);
-
   return {
     ok: true,
     messageId: result.result?.message_id ?? null,
     response: result
   };
+}
+
+export async function sendOrderNotification({ orderId, totalAmount, items }) {
+  const { telegramChatId, hasTelegramNotifications } = getTelegramConfig();
+
+  if (!hasTelegramNotifications) {
+    throw new Error(
+      "Telegram notifications are not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."
+    );
+  }
+
+  const message = [
+    "🆕 Yangi buyurtma",
+    `ID: ${orderId}`,
+    `Summa: ${totalAmount}`,
+    `Mahsulotlar: ${buildItemsList(items)}`
+  ].join("\n");
+
+  const telegramResponse = await sendTelegramMessage({
+    chatId: telegramChatId,
+    text: message
+  });
+
+  console.log(`[telegram] order ${orderId} notification sent successfully.`);
+
+  return telegramResponse;
+}
+
+export async function sendCourierApprovedLoginMessage({ telegramUserId, temporaryPassword = null, loginUrl }) {
+  const lines = [
+    "✅ Siz tasdiqlandingiz.",
+    "Kuryer panelga kirish uchun quyidagi linkdan foydalaning:",
+    "",
+    loginUrl
+  ];
+
+  if (temporaryPassword) {
+    lines.push("", `Vaqtinchalik parol: ${temporaryPassword}`);
+  }
+
+  return sendTelegramMessage({
+    chatId: telegramUserId,
+    text: lines.join("\n")
+  });
 }

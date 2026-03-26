@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireCourierAuth, attachOptionalCourierAuth } from "../middleware/requireCourierAuth.js";
 import {
   ensureCourierRegistrationRecord,
   getCourierAssignedOrdersByTelegramUserId,
@@ -9,6 +10,12 @@ import {
   updateCourierProfile,
   updateCourierStatus
 } from "../services/courierService.js";
+import {
+  ensureCourierLoginCredentials,
+  getCourierOrdersByIdForPortal,
+  getCourierProfileByIdForPortal
+} from "../services/courierAuthService.js";
+import { sendCourierApprovedLoginMessage } from "../services/telegramService.js";
 import { createAppError } from "../utils/appError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { resolveTelegramIdentity } from "../utils/telegramAuth.js";
@@ -21,6 +28,12 @@ import {
 } from "../utils/validation.js";
 
 const router = Router();
+const DEFAULT_COURIER_LOGIN_URL = "https://client-chi-nine-98.vercel.app/courier-login";
+
+function getCourierLoginUrl() {
+  const miniAppUrl = process.env.MINI_APP_URL || "https://client-chi-nine-98.vercel.app";
+  return `${miniAppUrl.replace(/\/+$/, "")}/courier-login`;
+}
 
 router.get(
   "/",
@@ -70,7 +83,14 @@ router.post(
 
 router.get(
   "/me",
+  attachOptionalCourierAuth,
   asyncHandler(async (req, res) => {
+    if (req.courierAuth) {
+      const courier = await getCourierProfileByIdForPortal(req.courierAuth.courierId);
+      res.json({ data: courier });
+      return;
+    }
+
     const telegramIdentity = resolveTelegramIdentity(req);
     const courier = await getCourierProfileByTelegramUserId(telegramIdentity.telegramUserId);
     res.json({ data: courier });
@@ -79,10 +99,54 @@ router.get(
 
 router.get(
   "/me/orders",
+  attachOptionalCourierAuth,
   asyncHandler(async (req, res) => {
+    if (req.courierAuth) {
+      const orders = await getCourierOrdersByIdForPortal(req.courierAuth.courierId);
+      res.json({ data: orders });
+      return;
+    }
+
     const telegramIdentity = resolveTelegramIdentity(req);
     const orders = await getCourierAssignedOrdersByTelegramUserId(telegramIdentity.telegramUserId);
     res.json({ data: orders });
+  })
+);
+
+router.patch(
+  "/online",
+  requireCourierAuth,
+  asyncHandler(async (req, res) => {
+    const parsed = updateCourierOnlineStatusSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      throw createAppError(400, "Kuryer online holati noto'g'ri.", parsed.error.flatten());
+    }
+
+    const courier = await updateCourierOnlineStatus(req.courierAuth.courierId, parsed.data.onlineStatus);
+
+    res.json({
+      message: "Kuryer online holati yangilandi.",
+      data: courier
+    });
+  })
+);
+
+router.post(
+  "/:courierId/login-access",
+  asyncHandler(async (req, res) => {
+    const { courierId } = req.params;
+
+    if (!courierId) {
+      throw createAppError(400, "Kuryer ID kiritilishi kerak.");
+    }
+
+    const loginAccess = await ensureCourierLoginCredentials(courierId);
+
+    res.json({
+      message: loginAccess.generated ? "Kuryer login ma'lumotlari yaratildi." : "Kuryer login ma'lumotlari tayyor.",
+      data: loginAccess
+    });
   })
 );
 
@@ -126,6 +190,27 @@ router.patch(
     }
 
     const courier = await updateCourierStatus(courierId, parsed.data.status);
+
+    if (parsed.data.status === "approved" && courier?.telegramUserId) {
+      try {
+        const { temporaryPassword } = await ensureCourierLoginCredentials(courier.id);
+        const telegramResponse = await sendCourierApprovedLoginMessage({
+          telegramUserId: courier.telegramUserId,
+          temporaryPassword,
+          loginUrl: getCourierLoginUrl() || DEFAULT_COURIER_LOGIN_URL
+        });
+
+        console.log("[telegram] courier approval login message sent", {
+          courierId: courier.id,
+          messageId: telegramResponse.messageId
+        });
+      } catch (telegramError) {
+        console.error("[telegram] failed to send courier approval login message", {
+          courierId: courier.id,
+          reason: telegramError.message
+        });
+      }
+    }
 
     res.json({
       message: "Kuryer statusi yangilandi.",

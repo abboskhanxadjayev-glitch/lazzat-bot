@@ -1,14 +1,16 @@
-const supabaseUrl = process.env.SUPABASE_URL || "";
+﻿const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const telegramChatId = process.env.TELEGRAM_CHAT_ID || "";
+const courierJwtSecret = process.env.COURIER_JWT_SECRET || "";
 
 function isPlaceholderValue(value) {
   return (
     value.includes("your-project-id") ||
     value.includes("your-service-role-key") ||
     value.includes("your-telegram-bot-token") ||
-    value.includes("your-telegram-chat-id")
+    value.includes("your-telegram-chat-id") ||
+    value.includes("your-courier-jwt-secret")
   );
 }
 
@@ -55,6 +57,7 @@ export const env = {
   supabaseServiceRoleKey,
   telegramBotToken,
   telegramChatId,
+  courierJwtSecret,
   supabaseConfigError,
   hasSupabase: !supabaseConfigError,
   hasTelegramNotifications

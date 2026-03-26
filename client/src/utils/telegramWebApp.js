@@ -11,6 +11,8 @@ function safeParseJson(value) {
   }
 }
 
+const TELEGRAM_CONTEXT_STORAGE_KEY = "lazzat.telegram.context";
+
 function normalizeTelegramUser(rawUser) {
   if (!rawUser?.id) {
     return null;
@@ -28,6 +30,42 @@ function normalizeTelegramUser(rawUser) {
     first_name: rawUser.first_name || rawUser.firstName || null,
     last_name: rawUser.last_name || rawUser.lastName || null
   };
+}
+
+function readStoredTelegramContext() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return safeParseJson(window.sessionStorage.getItem(TELEGRAM_CONTEXT_STORAGE_KEY));
+  } catch (error) {
+    console.warn("[telegram] failed to read stored Telegram context", error);
+    return null;
+  }
+}
+
+function persistTelegramContext(context) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!context?.initData || !context?.user?.id) {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      TELEGRAM_CONTEXT_STORAGE_KEY,
+      JSON.stringify({
+        initData: context.initData,
+        user: context.user,
+        cachedAt: new Date().toISOString()
+      })
+    );
+  } catch (error) {
+    console.warn("[telegram] failed to persist Telegram context", error);
+  }
 }
 
 function getTelegramLaunchParams() {
@@ -124,7 +162,8 @@ export function getTelegramContextSnapshot() {
         hasInitData: false,
         hasUnsafeUser: false,
         hasParsedInitUser: false,
-        hasLaunchParams: false
+        hasLaunchParams: false,
+        hasStoredContext: false
       }
     };
   }
@@ -132,21 +171,37 @@ export function getTelegramContextSnapshot() {
   const telegram = window.Telegram || null;
   const webApp = telegram?.WebApp ?? null;
   const launchInitData = getInitDataFromLaunchParams();
-  const initData = webApp?.initData || launchInitData || "";
+  const storedContext = readStoredTelegramContext();
+  const storedInitData = storedContext?.initData || "";
+  const shouldUseStoredInitData = Boolean(webApp && !webApp.initData && !launchInitData && storedInitData);
+  const initData = webApp?.initData || launchInitData || (shouldUseStoredInitData ? storedInitData : "");
   const initDataUnsafe = webApp?.initDataUnsafe || {};
   const parsedInitData = parseInitData(initData);
   const unsafeUser = normalizeTelegramUser(initDataUnsafe.user);
+  const storedUser = normalizeTelegramUser(storedContext?.user);
   const parsedUser = parsedInitData.user;
-  const user = unsafeUser || parsedUser;
+  const user = unsafeUser || parsedUser || (shouldUseStoredInitData ? storedUser : null);
 
   let contextSource = "missing";
 
   if (unsafeUser) {
     contextSource = "initDataUnsafe.user";
   } else if (parsedUser) {
-    contextSource = webApp?.initData ? "initData" : "launch-params";
+    if (webApp?.initData) {
+      contextSource = "initData";
+    } else if (launchInitData) {
+      contextSource = "launch-params";
+    } else {
+      contextSource = "session-cache";
+    }
+  } else if (shouldUseStoredInitData && storedUser) {
+    contextSource = "session-cache";
   } else if (webApp) {
     contextSource = "webapp-no-user";
+  }
+
+  if (user && initData) {
+    persistTelegramContext({ initData, user });
   }
 
   return {
@@ -164,7 +219,8 @@ export function getTelegramContextSnapshot() {
       hasInitData: Boolean(initData),
       hasUnsafeUser: Boolean(unsafeUser),
       hasParsedInitUser: Boolean(parsedUser),
-      hasLaunchParams: Boolean(launchInitData)
+      hasLaunchParams: Boolean(launchInitData),
+      hasStoredContext: Boolean(storedContext?.initData)
     }
   };
 }

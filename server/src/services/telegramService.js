@@ -12,7 +12,7 @@ function isPlaceholderValue(value) {
 }
 
 function getTelegramConfig() {
-  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || env.telegramBotToken || "";
+  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || env.telegramBotToken || "";
   const telegramChatId = process.env.TELEGRAM_CHAT_ID || env.telegramChatId || "";
   const hasTelegramNotifications = Boolean(
     telegramBotToken

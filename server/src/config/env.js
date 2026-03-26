@@ -1,6 +1,6 @@
-﻿const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || "";
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || "";
 const telegramChatId = process.env.TELEGRAM_CHAT_ID || "";
 const courierJwtSecret = process.env.COURIER_JWT_SECRET || "";
 

@@ -18,8 +18,8 @@ import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
 import { sendCourierAssignmentNotification, sendOrderNotification } from "./telegramService.js";
 
 const LEGACY_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
-const ORDER_ASSIGNMENT_META_SELECT_FIELDS = `${LEGACY_ORDER_SELECT_FIELDS}, assignment_method, assignment_distance_km`;
-const ENHANCED_ORDER_SELECT_FIELDS = `${ORDER_ASSIGNMENT_META_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
+const RELATION_ORDER_SELECT_FIELDS = `${LEGACY_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
+const ENHANCED_ORDER_SELECT_FIELDS = `${RELATION_ORDER_SELECT_FIELDS}, assignment_method, assignment_distance_km`;
 const COURIER_ASSIGNMENT_BASE_SELECT_FIELDS = "id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at";
 const COURIER_ASSIGNMENT_LOCATION_SELECT_FIELDS = `${COURIER_ASSIGNMENT_BASE_SELECT_FIELDS}, base_latitude, base_longitude`;
 const ACTIVE_COURIER_ORDER_STATUSES = ["assigned", "accepted", "ready_for_delivery", "on_the_way"];
@@ -118,7 +118,7 @@ async function runOrderQuery(buildQuery) {
   const canReuseOrderQueryMode = hasFreshCache(orderQuerySchemaCache.checkedAt, ORDER_QUERY_SCHEMA_TTL_MS);
   const currentMode = canReuseOrderQueryMode ? orderQuerySchemaCache.mode : null;
 
-  if (currentMode !== "meta" && currentMode !== "legacy") {
+  if (currentMode !== "relation" && currentMode !== "legacy") {
     const enhancedResult = await buildQuery(ENHANCED_ORDER_SELECT_FIELDS);
 
     if (!enhancedResult.error) {
@@ -137,21 +137,21 @@ async function runOrderQuery(buildQuery) {
   }
 
   if (currentMode !== "legacy") {
-    const metaResult = await buildQuery(ORDER_ASSIGNMENT_META_SELECT_FIELDS);
+    const relationResult = await buildQuery(RELATION_ORDER_SELECT_FIELDS);
 
-    if (!metaResult.error) {
+    if (!relationResult.error) {
       orderQuerySchemaCache = {
-        mode: "meta",
+        mode: "relation",
         checkedAt: Date.now()
       };
-      return metaResult;
+      return relationResult;
     }
 
-    if (!isOrderAssignmentMetadataError(metaResult.error)) {
-      return metaResult;
+    if (!isOrderRelationSchemaError(relationResult.error)) {
+      return relationResult;
     }
 
-    console.warn("[orders] assignment metadata fields unavailable, falling back", metaResult.error.message);
+    console.warn("[orders] courier relation fields unavailable, falling back", relationResult.error.message);
   }
 
   const legacyResult = await buildQuery(LEGACY_ORDER_SELECT_FIELDS);

@@ -48,8 +48,31 @@ function mapTelegramUser(user) {
   };
 }
 
+function getTelegramDiagnosticMessage({ isTelegramWebApp, initData, diagnostics }) {
+  if (!isTelegramWebApp) {
+    return "Sahifa Telegram Mini App ichida ochilmagan. Bot ichidagi web app tugmasidan qayta oching.";
+  }
+
+  if (!initData) {
+    return "Telegram WebApp ma'lumotlari yetib kelmadi. Tugma oddiy URL bo'lib ochilgan bo'lishi mumkin yoki Telegram initData yubormagan.";
+  }
+
+  if (diagnostics.hasInitData && !diagnostics.hasUnsafeUser && !diagnostics.hasParsedInitUser) {
+    return "Telegram initData topildi, lekin undan foydalanuvchi identifikatori o'qilmadi. Botdagi 'Courier panelni ochish' web app tugmasidan qayta oching.";
+  }
+
+  return "Telegram foydalanuvchi identifikatori topilmadi. Iltimos, bot ichidagi web app tugmasidan qayta urinib ko'ring.";
+}
+
 function CourierPage() {
-  const { user, displayName } = useTelegram();
+  const {
+    user,
+    displayName,
+    initData,
+    isTelegramWebApp,
+    contextSource,
+    diagnostics
+  } = useTelegram();
   const [registrationForm, setRegistrationForm] = useState({
     fullName: "",
     phone: ""
@@ -60,10 +83,12 @@ function CourierPage() {
   const [statusMessage, setStatusMessage] = useState("");
 
   const telegramUser = useMemo(() => mapTelegramUser(user), [user]);
-  const courierFetchEnabled = Boolean(telegramUser?.id);
+  const courierFetchEnabled = Boolean(telegramUser?.id || initData);
   const fetchAssignedOrders = useCallback(
-    ({ signal }) => telegramUser?.id ? getCourierOrders(telegramUser.id, { signal }) : Promise.resolve([]),
-    [telegramUser?.id]
+    ({ signal }) => courierFetchEnabled
+      ? getCourierOrders(telegramUser?.id || null, { signal })
+      : Promise.resolve([]),
+    [courierFetchEnabled, telegramUser?.id]
   );
 
   const {
@@ -75,7 +100,7 @@ function CourierPage() {
     liveMode: courierLiveMode,
     setCourierProfile
   } = useLiveCourierProfile({
-    telegramUserId: telegramUser?.id,
+    telegramUserId: telegramUser?.id || null,
     enabled: courierFetchEnabled
   });
 
@@ -102,8 +127,8 @@ function CourierPage() {
     applyOrderPatch: applyCourierOrderPatch
   } = useLiveOrders({
     fetchOrders: fetchAssignedOrders,
-    enabled: Boolean(telegramUser?.id && courier?.status === "approved"),
-    channelKey: `courier-assigned-${telegramUser?.id || "guest"}`
+    enabled: Boolean(courierFetchEnabled && courier?.status === "approved"),
+    channelKey: `courier-assigned-${telegramUser?.id || "telegram"}`
   });
 
   useEffect(() => {
@@ -114,6 +139,16 @@ function CourierPage() {
       }));
     }
   }, [displayName, registrationForm.fullName]);
+
+  useEffect(() => {
+    console.info("[courier] telegram context", {
+      telegramUserId: telegramUser?.id || null,
+      hasInitData: Boolean(initData),
+      isTelegramWebApp,
+      contextSource,
+      diagnostics
+    });
+  }, [contextSource, diagnostics, initData, isTelegramWebApp, telegramUser?.id]);
 
   const legacyActiveDeliveries = useMemo(
     () => legacyOrders.filter((order) => order.status === "on_the_way"),
@@ -188,7 +223,7 @@ function CourierPage() {
     }
   }, [applyLegacyOrderPatch]);
 
-  if (!telegramUser?.id) {
+  if (!courierFetchEnabled) {
     return (
       <div className="space-y-5">
         <PageHeader
@@ -197,8 +232,13 @@ function CourierPage() {
           description="Kuryer panelidan foydalanish uchun ilovani Telegram Mini App ichida ishga tushiring."
         />
 
-        <section className="surface-card text-sm leading-6 text-lazzat-ink/70">
-          Telegram foydalanuvchi identifikatori topilmadi.
+        <section className="surface-card space-y-3 text-sm leading-6 text-lazzat-ink/70">
+          <p>{getTelegramDiagnosticMessage({ isTelegramWebApp, initData, diagnostics })}</p>
+          <div className="rounded-[22px] border border-lazzat-gold/15 bg-lazzat-cream/70 p-4 text-xs text-lazzat-ink/65">
+            <p><span className="font-bold text-lazzat-maroon">Telegram WebApp:</span> {isTelegramWebApp ? "Ha" : "Yo'q"}</p>
+            <p className="mt-2"><span className="font-bold text-lazzat-maroon">Init data:</span> {initData ? "Bor" : "Yo'q"}</p>
+            <p className="mt-2"><span className="font-bold text-lazzat-maroon">Manba:</span> {contextSource}</p>
+          </div>
         </section>
       </div>
     );
@@ -357,7 +397,7 @@ function CourierPage() {
           <div>
             <p className="section-label">Telegram profil</p>
             <p className="mt-2 text-base font-bold text-lazzat-maroon">{displayName}</p>
-            <p className="mt-1 text-sm text-lazzat-ink/70">ID: {telegramUser.id}</p>
+            <p className="mt-1 text-sm text-lazzat-ink/70">ID: {telegramUser?.id || "Noma'lum"}</p>
           </div>
           <LiveFeedStatus liveMode={courierLiveMode} lastUpdatedAt={courierLastUpdatedAt} />
         </section>
@@ -583,5 +623,3 @@ function CourierPage() {
 }
 
 export default CourierPage;
-
-

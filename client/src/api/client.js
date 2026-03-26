@@ -1,3 +1,5 @@
+import { getTelegramHeaders } from "../utils/telegramWebApp";
+
 const LOCAL_API_ORIGIN = "http://localhost:5000";
 const PRODUCTION_API_ORIGIN = "https://lazzat-bot.onrender.com";
 
@@ -81,6 +83,13 @@ function createRequestError(response, payload, fallbackMessage) {
   return error;
 }
 
+function withTelegramIdentityHeaders(telegramUserId, headers = {}) {
+  return {
+    ...getTelegramHeaders(telegramUserId),
+    ...headers
+  };
+}
+
 const API_BASE_URL = resolveApiBaseUrl();
 const DEFAULT_TIMEOUT_MS = 12000;
 
@@ -148,13 +157,10 @@ export function getOrders(options = {}) {
   return request("/orders", options);
 }
 
-export function getMyOrders(telegramUserId, options = {}) {
+export function getMyOrders(telegramUserId = null, options = {}) {
   return request("/orders/my-orders", {
     ...options,
-    headers: {
-      ...(options.headers || {}),
-      "x-telegram-user-id": String(telegramUserId)
-    }
+    headers: withTelegramIdentityHeaders(telegramUserId, options.headers || {})
   });
 }
 
@@ -189,23 +195,17 @@ export function getCouriers(filters = {}, options = {}) {
   return request(`/couriers${query ? `?${query}` : ""}`, options);
 }
 
-export function getCourierProfile(telegramUserId, options = {}) {
+export function getCourierProfile(telegramUserId = null, options = {}) {
   return request("/couriers/me", {
     ...options,
-    headers: {
-      ...(options.headers || {}),
-      "x-telegram-user-id": String(telegramUserId)
-    }
+    headers: withTelegramIdentityHeaders(telegramUserId, options.headers || {})
   });
 }
 
-export function getCourierOrders(telegramUserId, options = {}) {
+export function getCourierOrders(telegramUserId = null, options = {}) {
   return request("/couriers/me/orders", {
     ...options,
-    headers: {
-      ...(options.headers || {}),
-      "x-telegram-user-id": String(telegramUserId)
-    }
+    headers: withTelegramIdentityHeaders(telegramUserId, options.headers || {})
   });
 }
 
@@ -229,6 +229,7 @@ export function createOrder(order, options = {}) {
   return request("/orders", {
     ...options,
     method: "POST",
+    headers: withTelegramIdentityHeaders(order?.telegramUser?.id || null, options.headers || {}),
     body: JSON.stringify(order),
     timeoutMs: options.timeoutMs || 12000
   });

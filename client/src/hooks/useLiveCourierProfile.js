@@ -6,9 +6,9 @@ const POLLING_INTERVAL_MS = 5000;
 const REALTIME_REFRESH_DEBOUNCE_MS = 400;
 const COURIER_REALTIME_TABLES = [{ schema: "public", table: "couriers" }];
 
-export function useLiveCourierProfile({ telegramUserId, enabled = true }) {
+export function useLiveCourierProfile({ telegramUserId = null, enabled = true }) {
   const [courier, setCourier] = useState(null);
-  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(enabled && telegramUserId));
+  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(enabled));
   const [error, setError] = useState(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [liveMode, setLiveMode] = useState(hasSupabaseRealtimeConfig ? "connecting" : "polling");
@@ -39,7 +39,7 @@ export function useLiveCourierProfile({ telegramUserId, enabled = true }) {
   }, []);
 
   const runFetch = useCallback(async ({ showLoading = false } = {}) => {
-    if (!mountedRef.current || !enabled || !telegramUserId) {
+    if (!mountedRef.current || !enabled) {
       return;
     }
 
@@ -100,7 +100,7 @@ export function useLiveCourierProfile({ telegramUserId, enabled = true }) {
   }, [enabled, telegramUserId]);
 
   const scheduleRefresh = useCallback(() => {
-    if (!mountedRef.current || !enabled || !telegramUserId) {
+    if (!mountedRef.current || !enabled) {
       return;
     }
 
@@ -110,7 +110,7 @@ export function useLiveCourierProfile({ telegramUserId, enabled = true }) {
     }
 
     runFetch();
-  }, [enabled, runFetch, telegramUserId]);
+  }, [enabled, runFetch]);
 
   const scheduleRealtimeRefresh = useCallback(() => {
     window.clearTimeout(realtimeRefreshTimeoutRef.current);
@@ -122,7 +122,7 @@ export function useLiveCourierProfile({ telegramUserId, enabled = true }) {
   useEffect(() => {
     mountedRef.current = true;
 
-    if (!enabled || !telegramUserId) {
+    if (!enabled) {
       setCourier(null);
       setError(null);
       setIsInitialLoading(false);
@@ -145,8 +145,9 @@ export function useLiveCourierProfile({ telegramUserId, enabled = true }) {
     } else {
       cleanupRealtimeChannels();
 
+      const channelSuffix = telegramUserId || "telegram";
       const channels = COURIER_REALTIME_TABLES.map((tableConfig, index) => supabase
-        .channel(`courier-profile-${telegramUserId}-${index}-${Math.random().toString(36).slice(2)}`)
+        .channel(`courier-profile-${channelSuffix}-${index}-${Math.random().toString(36).slice(2)}`)
         .on(
           "postgres_changes",
           {

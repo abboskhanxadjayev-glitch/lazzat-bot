@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const phonePattern = /^[+]?[-()\d\s]{7,20}$/;
+const uzbekPlatePattern = /^(?:\d{2}\s?[A-Z]\s?\d{3}\s?[A-Z]{2}|\d{2}\s?\d{3}\s?[A-Z]{3})$/i;
+
+function normalizePlateNumber(value) {
+  return value.trim().replace(/\s+/g, " ").toUpperCase();
+}
 
 export const ORDER_STATUS_VALUES = [
   "pending",
@@ -22,6 +27,26 @@ const telegramUserSchema = z.object({
   firstName: z.string().nullable().optional(),
   lastName: z.string().nullable().optional()
 });
+
+const optionalTrimmedText = (maxLength, label) => z
+  .string()
+  .trim()
+  .min(2, `${label} kamida 2 ta belgidan iborat bo'lishi kerak.`)
+  .max(maxLength)
+  .nullable()
+  .optional();
+
+const plateNumberSchema = z
+  .string()
+  .trim()
+  .min(5, "Avtomobil raqami juda qisqa.")
+  .max(20, "Avtomobil raqami juda uzun.")
+  .transform(normalizePlateNumber)
+  .refine((value) => uzbekPlatePattern.test(value), {
+    message: "Avtomobil raqami noto'g'ri formatda. Masalan: 01 A 123 BC"
+  })
+  .nullable()
+  .optional();
 
 export const createOrderSchema = z
   .object({
@@ -77,6 +102,9 @@ export const registerCourierSchema = z.object({
   fullName: z.string().trim().min(2, "F.I.Sh. kamida 2 ta belgidan iborat bo'lishi kerak.").max(120).optional(),
   phone: z.string().trim().regex(phonePattern, "Telefon raqami noto'g'ri formatda."),
   transportType: z.enum(COURIER_TRANSPORT_VALUES).optional(),
+  transportColor: optionalTrimmedText(60, "Transport rangi"),
+  vehicleBrand: optionalTrimmedText(80, "Transport brendi"),
+  plateNumber: plateNumberSchema,
   telegramUser: telegramUserSchema
 });
 
@@ -87,6 +115,9 @@ export const updateCourierProfileSchema = z
     transportType: z.enum(COURIER_TRANSPORT_VALUES, {
       errorMap: () => ({ message: "Transport turi noto'g'ri." })
     }).optional(),
+    transportColor: optionalTrimmedText(60, "Transport rangi"),
+    vehicleBrand: optionalTrimmedText(80, "Transport brendi"),
+    plateNumber: plateNumberSchema,
     submitForApproval: z.boolean().optional()
   })
   .superRefine((payload, context) => {

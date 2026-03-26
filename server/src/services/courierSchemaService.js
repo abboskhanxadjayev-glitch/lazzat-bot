@@ -15,6 +15,12 @@ let courierProfileSchemaCache = {
   reason: ""
 };
 
+let courierVehicleSchemaCache = {
+  ready: null,
+  checkedAt: 0,
+  reason: ""
+};
+
 export const COURIER_SCHEMA_DETAILS = {
   code: "COURIER_SCHEMA_NOT_READY",
   migrationFile: "server/supabase/migrations/20260325_add_courier_assignment.sql",
@@ -31,6 +37,18 @@ export const COURIER_PROFILE_SCHEMA_DETAILS = {
   requiredColumns: ["public.couriers.transport_type", "public.couriers.online_status"]
 };
 
+export const COURIER_VEHICLE_SCHEMA_DETAILS = {
+  code: "COURIER_VEHICLE_SCHEMA_NOT_READY",
+  migrationFile: "server/supabase/migrations/20260325_add_courier_vehicle_fields.sql",
+  schemaFile: "server/supabase/schema.sql",
+  requiredTables: ["public.couriers"],
+  requiredColumns: [
+    "public.couriers.transport_color",
+    "public.couriers.vehicle_brand",
+    "public.couriers.plate_number"
+  ]
+};
+
 function isSchemaCacheFresh(cache) {
   return Date.now() - cache.checkedAt < SCHEMA_CACHE_TTL_MS;
 }
@@ -44,13 +62,13 @@ export function isCourierSchemaError(error) {
   const errorMessage = error.message || "";
 
   return (
-    errorCode === "42703" ||
-    errorCode === "PGRST205" ||
-    errorCode === "PGRST200" ||
-    errorMessage.includes("courier_id") ||
-    errorMessage.includes("assigned_at") ||
-    errorMessage.includes("public.couriers") ||
-    errorMessage.includes("relationship")
+    errorCode === "42703"
+    || errorCode === "PGRST205"
+    || errorCode === "PGRST200"
+    || errorMessage.includes("courier_id")
+    || errorMessage.includes("assigned_at")
+    || errorMessage.includes("public.couriers")
+    || errorMessage.includes("relationship")
   );
 }
 
@@ -63,10 +81,27 @@ export function isCourierProfileSchemaError(error) {
   const errorMessage = error.message || "";
 
   return (
-    errorCode === "42703" ||
-    errorCode === "PGRST200" ||
-    errorMessage.includes("transport_type") ||
-    errorMessage.includes("online_status")
+    errorCode === "42703"
+    || errorCode === "PGRST200"
+    || errorMessage.includes("transport_type")
+    || errorMessage.includes("online_status")
+  );
+}
+
+export function isCourierVehicleSchemaError(error) {
+  if (!error) {
+    return false;
+  }
+
+  const errorCode = error.code || "";
+  const errorMessage = error.message || "";
+
+  return (
+    errorCode === "42703"
+    || errorCode === "PGRST200"
+    || errorMessage.includes("transport_color")
+    || errorMessage.includes("vehicle_brand")
+    || errorMessage.includes("plate_number")
   );
 }
 
@@ -87,6 +122,17 @@ export function createCourierProfileSchemaNotReadyError(reason = "Courier profil
     "Kuryer profil maydonlari hali tayyor emas. Yangi courier profile migratsiyasini Supabase bazasiga qo'llash kerak.",
     {
       ...COURIER_PROFILE_SCHEMA_DETAILS,
+      reason
+    }
+  );
+}
+
+export function createCourierVehicleSchemaNotReadyError(reason = "Courier vehicle fields are not ready yet.") {
+  return createAppError(
+    503,
+    "Kuryer transport maydonlari hali tayyor emas. Yangi courier vehicle migratsiyasini Supabase bazasiga qo'llash kerak.",
+    {
+      ...COURIER_VEHICLE_SCHEMA_DETAILS,
       reason
     }
   );
@@ -182,12 +228,61 @@ export async function ensureCourierProfileSchemaReady() {
   return true;
 }
 
+export async function ensureCourierVehicleSchemaReady() {
+  if (courierVehicleSchemaCache.ready === true && isSchemaCacheFresh(courierVehicleSchemaCache)) {
+    return true;
+  }
+
+  if (courierVehicleSchemaCache.ready === false && isSchemaCacheFresh(courierVehicleSchemaCache)) {
+    throw createCourierVehicleSchemaNotReadyError(courierVehicleSchemaCache.reason);
+  }
+
+  const vehicleColumnsCheck = await supabase
+    .from("couriers")
+    .select("id,transport_color,vehicle_brand,plate_number")
+    .limit(1);
+
+  if (vehicleColumnsCheck.error) {
+    if (isCourierVehicleSchemaError(vehicleColumnsCheck.error)) {
+      courierVehicleSchemaCache = {
+        ready: false,
+        checkedAt: Date.now(),
+        reason: vehicleColumnsCheck.error.message
+      };
+      throw createCourierVehicleSchemaNotReadyError(vehicleColumnsCheck.error.message);
+    }
+
+    throw createAppError(500, "Courier vehicle schema tekshirib bo'lmadi.", vehicleColumnsCheck.error);
+  }
+
+  courierVehicleSchemaCache = {
+    ready: true,
+    checkedAt: Date.now(),
+    reason: "ready"
+  };
+
+  return true;
+}
+
 export async function hasCourierProfileSchema() {
   try {
     await ensureCourierProfileSchemaReady();
     return true;
   } catch (error) {
     if (error?.details?.code === COURIER_PROFILE_SCHEMA_DETAILS.code) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+export async function hasCourierVehicleSchema() {
+  try {
+    await ensureCourierVehicleSchemaReady();
+    return true;
+  } catch (error) {
+    if (error?.details?.code === COURIER_VEHICLE_SCHEMA_DETAILS.code) {
       return false;
     }
 
@@ -203,6 +298,12 @@ export function resetCourierSchemaCache() {
   };
 
   courierProfileSchemaCache = {
+    ready: null,
+    checkedAt: 0,
+    reason: ""
+  };
+
+  courierVehicleSchemaCache = {
     ready: null,
     checkedAt: 0,
     reason: ""

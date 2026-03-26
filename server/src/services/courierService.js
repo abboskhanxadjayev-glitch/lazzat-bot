@@ -1,21 +1,27 @@
-﻿import { env } from "../config/env.js";
+import { env } from "../config/env.js";
 import { supabase } from "../config/supabase.js";
 import { createAppError } from "../utils/appError.js";
 import { getOrdersByCourierId } from "./orderService.js";
 import {
   ensureCourierProfileSchemaReady,
   ensureCourierSchemaReady,
+  ensureCourierVehicleSchemaReady,
   hasCourierProfileSchema,
+  hasCourierVehicleSchema,
   isCourierProfileSchemaError,
-  isCourierSchemaError
+  isCourierSchemaError,
+  isCourierVehicleSchemaError
 } from "./courierSchemaService.js";
 
 const BASE_COURIER_SELECT_FIELDS = "id, telegram_user_id, username, full_name, phone, status, is_active, created_at, updated_at";
-const ENHANCED_COURIER_SELECT_FIELDS = `${BASE_COURIER_SELECT_FIELDS}, transport_type, online_status`;
-const COURIER_PROFILE_SCHEMA_TTL_MS = 60_000;
+const PROFILE_COURIER_SELECT_FIELDS = `${BASE_COURIER_SELECT_FIELDS}, transport_type, online_status`;
+const VEHICLE_COURIER_SELECT_FIELDS = `${PROFILE_COURIER_SELECT_FIELDS}, transport_color, vehicle_brand, plate_number`;
+const COURIER_SELECT_CACHE_TTL_MS = 60_000;
+const UZBEK_PLATE_PATTERN = /^(?:\d{2}\s?[A-Z]\s?\d{3}\s?[A-Z]{2}|\d{2}\s?\d{3}\s?[A-Z]{3})$/i;
 
-let courierProfileSelectCache = {
-  available: null,
+let courierSelectCache = {
+  profileAvailable: null,
+  vehicleAvailable: null,
   checkedAt: 0
 };
 
@@ -45,6 +51,40 @@ function normalizeTelegramUserId(telegramUserId) {
   return parsedTelegramUserId;
 }
 
+function normalizeOptionalText(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const normalizedValue = value.trim();
+  return normalizedValue ? normalizedValue : null;
+}
+
+function normalizePlateNumber(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const normalizedValue = value.trim().replace(/\s+/g, " ").toUpperCase();
+  return normalizedValue ? normalizedValue : null;
+}
+
+function requiresTransportDetails(transportType) {
+  return ["bike", "moto", "car"].includes(transportType);
+}
+
+function requiresPlateNumber(transportType) {
+  return transportType === "car";
+}
+
 function getFullNameFromTelegramUser(telegramUser) {
   const parts = [telegramUser.firstName, telegramUser.lastName]
     .filter(Boolean)
@@ -62,35 +102,138 @@ function getFullNameFromTelegramUser(telegramUser) {
   return `Courier ${telegramUser.id}`;
 }
 
-function hasFreshCourierProfileSelectCache() {
-  return Date.now() - courierProfileSelectCache.checkedAt < COURIER_PROFILE_SCHEMA_TTL_MS;
+function hasFreshCourierSelectCache() {
+  return Date.now() - courierSelectCache.checkedAt < COURIER_SELECT_CACHE_TTL_MS;
+}
+
+function markCourierSelectCache(profileAvailable, vehicleAvailable) {
+  courierSelectCache = {
+    profileAvailable,
+    vehicleAvailable,
+    checkedAt: Date.now()
+  };
 }
 
 async function runCourierQuery(buildQuery) {
-  if (courierProfileSelectCache.available !== false || !hasFreshCourierProfileSelectCache()) {
-    const enhancedResult = await buildQuery(ENHANCED_COURIER_SELECT_FIELDS);
+  const shouldTryVehicleFields = courierSelectCache.vehicleAvailable !== false || !hasFreshCourierSelectCache();
+  const shouldTryProfileFields = courierSelectCache.profileAvailable !== false || !hasFreshCourierSelectCache();
 
-    if (!enhancedResult.error) {
-      courierProfileSelectCache = {
-        available: true,
-        checkedAt: Date.now()
-      };
-      return enhancedResult;
+  if (shouldTryVehicleFields) {
+    const vehicleResult = await buildQuery(VEHICLE_COURIER_SELECT_FIELDS);
+
+    if (!vehicleResult.error) {
+      markCourierSelectCache(true, true);
+      return vehicleResult;
     }
 
-    if (!isCourierProfileSchemaError(enhancedResult.error)) {
-      return enhancedResult;
+    if (isCourierVehicleSchemaError(vehicleResult.error)) {
+      markCourierSelectCache(true, false);
+      console.warn("[couriers] vehicle fields not detected, falling back to profile select", vehicleResult.error.message);
+    } else if (!isCourierProfileSchemaError(vehicleResult.error)) {
+      return vehicleResult;
+    } else {
+      markCourierSelectCache(false, false);
+      console.warn("[couriers] profile fields not detected, falling back to base select", vehicleResult.error.message);
+    }
+  }
+
+  if (shouldTryProfileFields) {
+    const profileResult = await buildQuery(PROFILE_COURIER_SELECT_FIELDS);
+
+    if (!profileResult.error) {
+      markCourierSelectCache(true, false);
+      return profileResult;
     }
 
-    courierProfileSelectCache = {
-      available: false,
-      checkedAt: Date.now()
-    };
+    if (!isCourierProfileSchemaError(profileResult.error)) {
+      return profileResult;
+    }
 
-    console.warn("[couriers] extended profile fields not detected, falling back to base select", enhancedResult.error.message);
+    markCourierSelectCache(false, false);
+    console.warn("[couriers] profile fields not detected, falling back to base select", profileResult.error.message);
   }
 
   return buildQuery(BASE_COURIER_SELECT_FIELDS);
+}
+
+function buildMergedCourierProfile(existingCourier, payload) {
+  const mergedProfile = {
+    phone: payload.phone !== undefined ? payload.phone.trim() : (existingCourier?.phone || ""),
+    transportType: payload.transportType !== undefined ? payload.transportType : (existingCourier?.transport_type ?? null),
+    transportColor: payload.transportColor !== undefined
+      ? normalizeOptionalText(payload.transportColor)
+      : (existingCourier?.transport_color ?? null),
+    vehicleBrand: payload.vehicleBrand !== undefined
+      ? normalizeOptionalText(payload.vehicleBrand)
+      : (existingCourier?.vehicle_brand ?? null),
+    plateNumber: payload.plateNumber !== undefined
+      ? normalizePlateNumber(payload.plateNumber)
+      : (existingCourier?.plate_number ?? null)
+  };
+
+  if (mergedProfile.transportType === "foot") {
+    mergedProfile.transportColor = null;
+    mergedProfile.vehicleBrand = null;
+    mergedProfile.plateNumber = null;
+  }
+
+  if (mergedProfile.transportType === "bike" || mergedProfile.transportType === "moto") {
+    mergedProfile.plateNumber = null;
+  }
+
+  return mergedProfile;
+}
+
+function assertCourierProfileReadyForApproval(profile) {
+  if (!profile.phone) {
+    throw createAppError(400, "Kuryer telefon raqami kiritilishi kerak.", {
+      code: "COURIER_PHONE_REQUIRED"
+    });
+  }
+
+  if (!profile.transportType) {
+    throw createAppError(400, "Kuryer transport turi tanlanishi kerak.", {
+      code: "COURIER_TRANSPORT_REQUIRED"
+    });
+  }
+
+  if (requiresTransportDetails(profile.transportType) && !profile.transportColor) {
+    throw createAppError(400, "Transport rangi kiritilishi kerak.", {
+      code: "COURIER_TRANSPORT_COLOR_REQUIRED",
+      transportType: profile.transportType
+    });
+  }
+
+  if (requiresTransportDetails(profile.transportType) && !profile.vehicleBrand) {
+    throw createAppError(400, "Transport brendi yoki modeli kiritilishi kerak.", {
+      code: "COURIER_VEHICLE_BRAND_REQUIRED",
+      transportType: profile.transportType
+    });
+  }
+
+  if (requiresPlateNumber(profile.transportType)) {
+    if (!profile.plateNumber) {
+      throw createAppError(400, "Avtomobil raqami kiritilishi kerak.", {
+        code: "COURIER_PLATE_REQUIRED"
+      });
+    }
+
+    if (!UZBEK_PLATE_PATTERN.test(profile.plateNumber)) {
+      throw createAppError(400, "Avtomobil raqami noto'g'ri formatda. Masalan: 01 A 123 BC", {
+        code: "COURIER_PLATE_INVALID",
+        plateNumber: profile.plateNumber
+      });
+    }
+  }
+}
+
+function isCourierProfileComplete(profile) {
+  try {
+    assertCourierProfileReadyForApproval(profile);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeCourierRecord(courierRecord) {
@@ -100,6 +243,9 @@ function normalizeCourierRecord(courierRecord) {
 
   const phone = courierRecord.phone || "";
   const transportType = courierRecord.transport_type ?? null;
+  const transportColor = courierRecord.transport_color ?? null;
+  const vehicleBrand = courierRecord.vehicle_brand ?? null;
+  const plateNumber = courierRecord.plate_number ?? null;
   const onlineStatus = courierRecord.online_status ?? "offline";
 
   return {
@@ -109,10 +255,19 @@ function normalizeCourierRecord(courierRecord) {
     fullName: courierRecord.full_name,
     phone,
     transportType,
+    transportColor,
+    vehicleBrand,
+    plateNumber,
     onlineStatus,
     status: courierRecord.status,
     isActive: Boolean(courierRecord.is_active),
-    isProfileComplete: Boolean(phone && transportType),
+    isProfileComplete: isCourierProfileComplete({
+      phone,
+      transportType,
+      transportColor,
+      vehicleBrand,
+      plateNumber
+    }),
     createdAt: courierRecord.created_at,
     updatedAt: courierRecord.updated_at
   };
@@ -158,6 +313,10 @@ async function getCourierProfileFieldsAvailable() {
   return hasCourierProfileSchema();
 }
 
+async function getCourierVehicleFieldsAvailable() {
+  return hasCourierVehicleSchema();
+}
+
 function buildCourierIdentityPayload({ existingCourier, telegramUser, fullName }) {
   const payload = {
     full_name: existingCourier?.full_name || fullName,
@@ -174,7 +333,7 @@ function buildCourierIdentityPayload({ existingCourier, telegramUser, fullName }
   return payload;
 }
 
-async function insertOrUpdateCourier(existingCourier, payload, selectFields = ENHANCED_COURIER_SELECT_FIELDS) {
+async function insertOrUpdateCourier(existingCourier, payload, selectFields = VEHICLE_COURIER_SELECT_FIELDS) {
   let response;
 
   if (existingCourier) {
@@ -196,12 +355,13 @@ async function insertOrUpdateCourier(existingCourier, payload, selectFields = EN
     return response.data;
   }
 
-  if (isCourierProfileSchemaError(response.error) && selectFields !== BASE_COURIER_SELECT_FIELDS) {
-    courierProfileSelectCache = {
-      available: false,
-      checkedAt: Date.now()
-    };
+  if (isCourierVehicleSchemaError(response.error) && selectFields !== PROFILE_COURIER_SELECT_FIELDS) {
+    markCourierSelectCache(true, false);
+    return insertOrUpdateCourier(existingCourier, payload, PROFILE_COURIER_SELECT_FIELDS);
+  }
 
+  if (isCourierProfileSchemaError(response.error) && selectFields !== BASE_COURIER_SELECT_FIELDS) {
+    markCourierSelectCache(false, false);
     return insertOrUpdateCourier(existingCourier, payload, BASE_COURIER_SELECT_FIELDS);
   }
 
@@ -271,6 +431,8 @@ export async function registerCourier(payload) {
   const existingCourier = await getCourierRecordByTelegramUserId(telegramUserId);
   const fullName = payload.fullName?.trim() || getFullNameFromTelegramUser(payload.telegramUser);
   const profileFieldsAvailable = await getCourierProfileFieldsAvailable();
+  const vehicleFieldsAvailable = profileFieldsAvailable ? await getCourierVehicleFieldsAvailable() : false;
+  const mergedProfile = buildMergedCourierProfile(existingCourier, payload);
   const courierPayload = {
     ...buildCourierIdentityPayload({ existingCourier, telegramUser: payload.telegramUser, fullName }),
     phone: payload.phone.trim(),
@@ -280,9 +442,13 @@ export async function registerCourier(payload) {
 
   if (profileFieldsAvailable) {
     courierPayload.online_status = existingCourier?.online_status || "offline";
-    if (payload.transportType !== undefined) {
-      courierPayload.transport_type = payload.transportType || null;
-    }
+    courierPayload.transport_type = mergedProfile.transportType;
+  }
+
+  if (vehicleFieldsAvailable) {
+    courierPayload.transport_color = mergedProfile.transportColor;
+    courierPayload.vehicle_brand = mergedProfile.vehicleBrand;
+    courierPayload.plate_number = mergedProfile.plateNumber;
   }
 
   const courierRecord = await insertOrUpdateCourier(existingCourier, courierPayload);
@@ -311,23 +477,43 @@ export async function updateCourierProfile(courierId, payload) {
     updatePayload.phone = payload.phone.trim();
   }
 
-  const wantsExtendedFields = payload.transportType !== undefined || payload.submitForApproval === true;
+  const touchesProfileFields = payload.transportType !== undefined || payload.submitForApproval === true;
+  const touchesVehicleFields = payload.transportColor !== undefined || payload.vehicleBrand !== undefined || payload.plateNumber !== undefined;
 
-  if (wantsExtendedFields) {
+  if (touchesProfileFields) {
     await ensureCourierProfileSchemaReady();
+  }
 
-    if (payload.transportType !== undefined) {
-      updatePayload.transport_type = payload.transportType;
+  const mergedProfile = buildMergedCourierProfile(existingCourier, payload);
+  const needsVehicleSchema = touchesVehicleFields || (payload.submitForApproval === true && requiresTransportDetails(mergedProfile.transportType));
+
+  if (needsVehicleSchema) {
+    await ensureCourierVehicleSchemaReady();
+  }
+
+  if (touchesProfileFields) {
+    updatePayload.transport_type = mergedProfile.transportType;
+  }
+
+  if (touchesVehicleFields || payload.transportType !== undefined || payload.submitForApproval === true) {
+    const vehicleSchemaAvailable = await getCourierVehicleFieldsAvailable();
+
+    if (vehicleSchemaAvailable) {
+      updatePayload.transport_color = mergedProfile.transportColor;
+      updatePayload.vehicle_brand = mergedProfile.vehicleBrand;
+      updatePayload.plate_number = mergedProfile.plateNumber;
+    }
+  }
+
+  if (payload.submitForApproval) {
+    assertCourierProfileReadyForApproval(mergedProfile);
+
+    if (existingCourier.status !== "approved" && existingCourier.status !== "blocked") {
+      updatePayload.status = "pending";
+      updatePayload.is_active = false;
     }
 
-    if (payload.submitForApproval) {
-      if (existingCourier.status !== "approved" && existingCourier.status !== "blocked") {
-        updatePayload.status = "pending";
-        updatePayload.is_active = false;
-      }
-
-      updatePayload.online_status = "offline";
-    }
+    updatePayload.online_status = "offline";
   }
 
   const courierRecord = await insertOrUpdateCourier(existingCourier, updatePayload);
@@ -427,5 +613,3 @@ export async function updateCourierOnlineStatus(courierId, onlineStatus) {
 
   return normalizeCourierRecord(courierRecord);
 }
-
-

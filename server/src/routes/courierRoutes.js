@@ -11,6 +11,7 @@ import {
 } from "../services/courierService.js";
 import { createAppError } from "../utils/appError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { resolveTelegramIdentity } from "../utils/telegramAuth.js";
 import {
   ensureCourierSchema,
   registerCourierSchema,
@@ -20,10 +21,6 @@ import {
 } from "../utils/validation.js";
 
 const router = Router();
-
-function getSingleHeaderValue(value) {
-  return Array.isArray(value) ? value[0] : value;
-}
 
 router.get(
   "/",
@@ -74,14 +71,8 @@ router.post(
 router.get(
   "/me",
   asyncHandler(async (req, res) => {
-    const telegramUserId = getSingleHeaderValue(req.headers["x-telegram-user-id"])
-      || getSingleHeaderValue(req.query.telegramUserId);
-
-    if (!telegramUserId) {
-      throw createAppError(400, "Telegram user ID kiritilishi kerak.");
-    }
-
-    const courier = await getCourierProfileByTelegramUserId(telegramUserId);
+    const telegramIdentity = resolveTelegramIdentity(req);
+    const courier = await getCourierProfileByTelegramUserId(telegramIdentity.telegramUserId);
     res.json({ data: courier });
   })
 );
@@ -89,14 +80,8 @@ router.get(
 router.get(
   "/me/orders",
   asyncHandler(async (req, res) => {
-    const telegramUserId = getSingleHeaderValue(req.headers["x-telegram-user-id"])
-      || getSingleHeaderValue(req.query.telegramUserId);
-
-    if (!telegramUserId) {
-      throw createAppError(400, "Telegram user ID kiritilishi kerak.");
-    }
-
-    const orders = await getCourierAssignedOrdersByTelegramUserId(telegramUserId);
+    const telegramIdentity = resolveTelegramIdentity(req);
+    const orders = await getCourierAssignedOrdersByTelegramUserId(telegramIdentity.telegramUserId);
     res.json({ data: orders });
   })
 );

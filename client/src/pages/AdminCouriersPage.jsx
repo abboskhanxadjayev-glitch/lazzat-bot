@@ -54,6 +54,10 @@ function formatTransportType(value) {
   return TRANSPORT_LABELS[value] || "Kiritilmagan";
 }
 
+function formatOptionalText(value) {
+  return value || "-";
+}
+
 function CourierStatusBadge({ status }) {
   const normalizedStatus = status || "pending";
   const style = STATUS_BADGE_STYLES[normalizedStatus] || STATUS_BADGE_STYLES.pending;
@@ -117,6 +121,9 @@ function AdminCouriersPage() {
         courier.username,
         courier.phone,
         formatTransportType(courier.transportType),
+        courier.transportColor,
+        courier.vehicleBrand,
+        courier.plateNumber,
         ONLINE_STATUS_LABELS[courier.onlineStatus] || courier.onlineStatus
       ]
         .filter(Boolean)
@@ -236,7 +243,7 @@ function AdminCouriersPage() {
                   type="search"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Ism, username, telefon yoki transport"
+                  placeholder="Ism, username, telefon, transport"
                   className="field-input"
                 />
               </label>
@@ -305,6 +312,11 @@ function AdminCouriersPage() {
                     <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-lazzat-red/60">
                       Transport: {formatTransportType(courier.transportType)}
                     </p>
+                    {(courier.vehicleBrand || courier.plateNumber) ? (
+                      <p className="mt-2 text-xs text-lazzat-ink/60">
+                        {courier.vehicleBrand || "Transport"}{courier.plateNumber ? ` • ${courier.plateNumber}` : ""}
+                      </p>
+                    ) : null}
                   </button>
                 );
               }) : (
@@ -354,7 +366,13 @@ function AdminCouriersPage() {
                     <span className="font-bold text-lazzat-maroon">Transport:</span> {formatTransportType(selectedCourier.transportType)}
                   </p>
                   <p className="mt-2">
-                    <span className="font-bold text-lazzat-maroon">Profil to'liq:</span> {selectedCourier.isProfileComplete ? "Ha" : "Yo'q"}
+                    <span className="font-bold text-lazzat-maroon">Transport rangi:</span> {formatOptionalText(selectedCourier.transportColor)}
+                  </p>
+                  <p className="mt-2">
+                    <span className="font-bold text-lazzat-maroon">Brend / model:</span> {formatOptionalText(selectedCourier.vehicleBrand)}
+                  </p>
+                  <p className="mt-2">
+                    <span className="font-bold text-lazzat-maroon">Davlat raqami:</span> {formatOptionalText(selectedCourier.plateNumber)}
                   </p>
                 </div>
 
@@ -367,6 +385,9 @@ function AdminCouriersPage() {
                   </p>
                   <p className="mt-2">
                     <span className="font-bold text-lazzat-maroon">Online:</span> {ONLINE_STATUS_LABELS[selectedCourier.onlineStatus] || selectedCourier.onlineStatus}
+                  </p>
+                  <p className="mt-2">
+                    <span className="font-bold text-lazzat-maroon">Profil to'liq:</span> {selectedCourier.isProfileComplete ? "Ha" : "Yo'q"}
                   </p>
                 </div>
               </div>

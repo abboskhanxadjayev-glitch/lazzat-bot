@@ -19,7 +19,13 @@ const OFFLINE_BUTTON_LABEL = "\u26AA Offline bo'lish";
 const SHARE_CONTACT_LABEL = "\u{1F4F1} Telefonni ulashish";
 const CANCEL_BUTTON_LABEL = "\u2B05 Bekor qilish";
 const PHONE_PATTERN = /^[+]?[-()\d\s]{7,20}$/;
-const RESERVED_TEXT_BUTTONS = new Set([COURIER_BUTTON_LABEL, ONLINE_BUTTON_LABEL, OFFLINE_BUTTON_LABEL, CANCEL_BUTTON_LABEL]);
+const UZBEK_PLATE_PATTERN = /^(?:\d{2}\s?[A-Z]\s?\d{3}\s?[A-Z]{2}|\d{2}\s?\d{3}\s?[A-Z]{3})$/i;
+const RESERVED_TEXT_BUTTONS = new Set([
+  COURIER_BUTTON_LABEL,
+  ONLINE_BUTTON_LABEL,
+  OFFLINE_BUTTON_LABEL,
+  CANCEL_BUTTON_LABEL
+]);
 const onboardingState = new Map();
 
 const TRANSPORT_OPTIONS = [
@@ -80,6 +86,22 @@ function mapTelegramUser(user) {
   };
 }
 
+function normalizeFreeText(value) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function normalizePlateNumber(value) {
+  return normalizeFreeText(value).toUpperCase();
+}
+
+function needsTransportDetails(transportType) {
+  return ["bike", "moto", "car"].includes(transportType);
+}
+
+function needsPlateNumber(transportType) {
+  return transportType === "car";
+}
+
 function formatTransportType(value) {
   return TRANSPORT_LABELS[value] || "Kiritilmagan";
 }
@@ -114,6 +136,12 @@ function getTransportKeyboard() {
   ]).resize().oneTime();
 }
 
+function getFreeTextKeyboard() {
+  return Markup.keyboard([
+    [Markup.button.text(CANCEL_BUTTON_LABEL)]
+  ]).resize().oneTime();
+}
+
 function getCourierPanelKeyboard(courier, config) {
   const toggleButtons = courier?.status === "approved"
     ? [Markup.button.text(ONLINE_BUTTON_LABEL), Markup.button.text(OFFLINE_BUTTON_LABEL)]
@@ -135,8 +163,8 @@ function getCourierPanelKeyboard(courier, config) {
   return Markup.keyboard(rows).resize();
 }
 
-function setOnboardingState(userId, step, courierId) {
-  onboardingState.set(String(userId), { step, courierId });
+function setOnboardingState(userId, nextState) {
+  onboardingState.set(String(userId), nextState);
 }
 
 function getOnboardingState(userId) {
@@ -164,6 +192,18 @@ function getCourierFlowStep(courier) {
     return "transport";
   }
 
+  if (needsTransportDetails(courier.transportType) && !courier.transportColor) {
+    return "transport_color";
+  }
+
+  if (needsTransportDetails(courier.transportType) && !courier.vehicleBrand) {
+    return "vehicle_brand";
+  }
+
+  if (needsPlateNumber(courier.transportType) && !courier.plateNumber) {
+    return "plate_number";
+  }
+
   if (courier.status === "approved") {
     return "approved";
   }
@@ -172,18 +212,36 @@ function getCourierFlowStep(courier) {
 }
 
 function buildCourierSummary(courier) {
-  return [
+  const lines = [
     `ID: ${courier.telegramUserId}`,
     `Holat: ${formatCourierStatus(courier.status)}`,
     `Telefon: ${courier.phone || "Kiritilmagan"}`,
     `Transport: ${formatTransportType(courier.transportType)}`,
     `Online: ${formatOnlineStatus(courier.onlineStatus)}`
-  ].join("\n");
+  ];
+
+  if (courier.transportColor) {
+    lines.push(`Rangi: ${courier.transportColor}`);
+  }
+
+  if (courier.vehicleBrand) {
+    lines.push(`Brend/model: ${courier.vehicleBrand}`);
+  }
+
+  if (courier.plateNumber) {
+    lines.push(`Davlat raqami: ${courier.plateNumber}`);
+  }
+
+  return lines.join("\n");
 }
 
 function getApiErrorMessage(error, fallbackMessage) {
   if (error?.details?.code === "COURIER_PROFILE_SCHEMA_NOT_READY") {
     return "Kuryer profil maydonlari hali tayyor emas. Iltimos, operator bilan bog'laning.";
+  }
+
+  if (error?.details?.code === "COURIER_VEHICLE_SCHEMA_NOT_READY") {
+    return "Kuryer transport maydonlari hali tayyor emas. Iltimos, operator bilan bog'laning.";
   }
 
   if (error?.details?.code === "COURIER_BLOCKED") {
@@ -201,9 +259,9 @@ function getHelpText() {
   return [
     "Lazzat Oshxonasi boti.",
     "",
-    "\u2022 Buyurtma berish uchun: üçî Buyurtma berish",
-    "\u2022 Kuryer onboardingi uchun: üöö Kuryer bo'lish",
-    "\u2022 Telegram ID ni ko'rish uchun: /myid"
+    `ï Buyurtma berish uchun: ${ORDER_BUTTON_LABEL}`,
+    `ï Kuryer onboardingi uchun: ${COURIER_BUTTON_LABEL}`,
+    "ï Telegram ID ni ko'rish uchun: /myid"
   ].join("\n");
 }
 
@@ -225,6 +283,19 @@ async function loadCourierProfile(ctx) {
   return getCourierProfile(ctx.from.id);
 }
 
+async function finalizeCourierOnboarding(ctx, courier, profilePayload, config) {
+  const updatedCourier = await updateCourierProfile(courier.id, {
+    ...profilePayload,
+    submitForApproval: true
+  });
+
+  clearOnboardingState(ctx.from?.id);
+  await ctx.reply(
+    `Ro'yxatdan o'tish yakunlandi. Admin tasdiqlashi kerak.\n\n${buildCourierSummary(updatedCourier)}`,
+    getCourierPanelKeyboard(updatedCourier, config)
+  );
+}
+
 async function sendCourierEntryState(ctx, courier, config, options = {}) {
   const { messagePrefix = "" } = options;
   const userId = ctx.from?.id;
@@ -237,7 +308,7 @@ async function sendCourierEntryState(ctx, courier, config, options = {}) {
   const step = getCourierFlowStep(courier);
 
   if (step === "phone") {
-    setOnboardingState(userId, "phone", courier.id);
+    setOnboardingState(userId, { step: "phone", courierId: courier.id });
     await ctx.reply(
       `${messagePrefix}Kuryer bo'lib ro'yxatdan o'tish uchun telefon raqamingizni yuboring yoki tugma orqali ulashing.`,
       getPhoneKeyboard()
@@ -246,21 +317,48 @@ async function sendCourierEntryState(ctx, courier, config, options = {}) {
   }
 
   if (step === "transport") {
-    setOnboardingState(userId, "transport", courier.id);
-    await ctx.reply(
-      `${messagePrefix}Transport turini tanlang.`,
-      getTransportKeyboard()
-    );
+    setOnboardingState(userId, { step: "transport", courierId: courier.id });
+    await ctx.reply(`${messagePrefix}Transport turini tanlang.`, getTransportKeyboard());
+    return;
+  }
+
+  if (step === "transport_color") {
+    setOnboardingState(userId, {
+      step: "transport_color",
+      courierId: courier.id,
+      transportType: courier.transportType
+    });
+    await ctx.reply(`${messagePrefix}Transport rangini yozing. Masalan: qora, oq, ko'k.`, getFreeTextKeyboard());
+    return;
+  }
+
+  if (step === "vehicle_brand") {
+    setOnboardingState(userId, {
+      step: "vehicle_brand",
+      courierId: courier.id,
+      transportType: courier.transportType,
+      transportColor: courier.transportColor || null
+    });
+    await ctx.reply(`${messagePrefix}Transport brendi yoki modelini yozing.`, getFreeTextKeyboard());
+    return;
+  }
+
+  if (step === "plate_number") {
+    setOnboardingState(userId, {
+      step: "plate_number",
+      courierId: courier.id,
+      transportType: courier.transportType,
+      transportColor: courier.transportColor || null,
+      vehicleBrand: courier.vehicleBrand || null
+    });
+    await ctx.reply(`${messagePrefix}Avtomobil davlat raqamini yozing. Masalan: 01 A 123 BC`, getFreeTextKeyboard());
     return;
   }
 
   clearOnboardingState(userId);
 
   if (step === "blocked") {
-    await ctx.reply(
-      `${messagePrefix}Kuryer profilingiz bloklangan. Operator bilan bog'laning.`,
-      getMainKeyboard(config)
-    );
+    await ctx.reply(`${messagePrefix}Kuryer profilingiz bloklangan. Operator bilan bog'laning.`, getMainKeyboard(config));
     return;
   }
 
@@ -301,7 +399,7 @@ async function handlePhoneCapture(ctx, phoneNumber, config) {
     courier = await getOrCreateCourier(ctx);
   }
 
-  const normalizedPhone = phoneNumber.trim();
+  const normalizedPhone = normalizeFreeText(phoneNumber);
 
   if (!PHONE_PATTERN.test(normalizedPhone)) {
     await ctx.reply("Telefon raqamini to'g'ri formatda yuboring. Masalan: +998 90 123 45 67", getPhoneKeyboard());
@@ -312,7 +410,7 @@ async function handlePhoneCapture(ctx, phoneNumber, config) {
     const updatedCourier = await updateCourierProfile(courier.id, {
       phone: normalizedPhone
     });
-    setOnboardingState(userId, "transport", updatedCourier.id);
+    setOnboardingState(userId, { step: "transport", courierId: updatedCourier.id });
     await ctx.reply("Rahmat. Endi transport turini tanlang.", getTransportKeyboard());
   } catch (error) {
     console.error("[bot] phone capture error", error);
@@ -334,19 +432,126 @@ async function handleTransportSelection(ctx, transportType, config) {
   }
 
   try {
-    const updatedCourier = await updateCourierProfile(courier.id, {
-      transportType,
-      submitForApproval: true
-    });
+    if (transportType === "foot") {
+      await finalizeCourierOnboarding(ctx, courier, {
+        transportType,
+        transportColor: null,
+        vehicleBrand: null,
+        plateNumber: null
+      }, config);
+      return;
+    }
 
-    clearOnboardingState(userId);
-    await ctx.reply(
-      `Ro'yxatdan o'tish yakunlandi. Admin tasdiqlashi kerak.\n\n${buildCourierSummary(updatedCourier)}`,
-      getCourierPanelKeyboard(updatedCourier, config)
-    );
+    setOnboardingState(userId, {
+      step: "transport_color",
+      courierId: courier.id,
+      transportType
+    });
+    await ctx.reply("Transport rangini yozing. Masalan: qora, oq, ko'k.", getFreeTextKeyboard());
   } catch (error) {
     console.error("[bot] transport selection error", error);
     await ctx.reply(getApiErrorMessage(error, "Transport turini saqlab bo'lmadi."), getMainKeyboard(config));
+  }
+}
+
+async function handleTransportColorInput(ctx, transportColor, config) {
+  const userId = ctx.from?.id;
+  const state = getOnboardingState(userId);
+
+  if (!userId || !state?.transportType) {
+    return;
+  }
+
+  const normalizedTransportColor = normalizeFreeText(transportColor);
+
+  if (normalizedTransportColor.length < 2) {
+    await ctx.reply("Transport rangini aniqroq yozing. Masalan: qora, oq, ko'k.", getFreeTextKeyboard());
+    return;
+  }
+
+  setOnboardingState(userId, {
+    ...state,
+    step: "vehicle_brand",
+    transportColor: normalizedTransportColor
+  });
+  await ctx.reply("Transport brendi yoki modelini yozing.", getFreeTextKeyboard());
+}
+
+async function handleVehicleBrandInput(ctx, vehicleBrand, config) {
+  const userId = ctx.from?.id;
+  const state = getOnboardingState(userId);
+
+  if (!userId || !state?.transportType || !state?.transportColor) {
+    return;
+  }
+
+  const normalizedVehicleBrand = normalizeFreeText(vehicleBrand);
+
+  if (normalizedVehicleBrand.length < 2) {
+    await ctx.reply("Transport brendi yoki modelini to'liqroq yozing.", getFreeTextKeyboard());
+    return;
+  }
+
+  let courier = await loadCourierProfile(ctx);
+
+  if (!courier) {
+    courier = await getOrCreateCourier(ctx);
+  }
+
+  if (needsPlateNumber(state.transportType)) {
+    setOnboardingState(userId, {
+      ...state,
+      step: "plate_number",
+      vehicleBrand: normalizedVehicleBrand
+    });
+    await ctx.reply("Avtomobil davlat raqamini yozing. Masalan: 01 A 123 BC", getFreeTextKeyboard());
+    return;
+  }
+
+  try {
+    await finalizeCourierOnboarding(ctx, courier, {
+      transportType: state.transportType,
+      transportColor: state.transportColor,
+      vehicleBrand: normalizedVehicleBrand,
+      plateNumber: null
+    }, config);
+  } catch (error) {
+    console.error("[bot] vehicle brand error", error);
+    await ctx.reply(getApiErrorMessage(error, "Transport ma'lumotlarini saqlab bo'lmadi."), getMainKeyboard(config));
+  }
+}
+
+async function handlePlateNumberInput(ctx, plateNumber, config) {
+  const userId = ctx.from?.id;
+  const state = getOnboardingState(userId);
+
+  if (!userId || !state?.transportType || !state?.transportColor || !state?.vehicleBrand) {
+    return;
+  }
+
+  const normalizedPlateNumber = normalizePlateNumber(plateNumber);
+
+  if (!UZBEK_PLATE_PATTERN.test(normalizedPlateNumber)) {
+    await ctx.reply("Davlat raqami noto'g'ri. Masalan: 01 A 123 BC", getFreeTextKeyboard());
+    return;
+  }
+
+  let courier = await loadCourierProfile(ctx);
+
+  if (!courier) {
+    courier = await getOrCreateCourier(ctx);
+  }
+
+  try {
+    await finalizeCourierOnboarding(ctx, courier, {
+      transportType: state.transportType,
+      transportColor: state.transportColor,
+      vehicleBrand: state.vehicleBrand,
+      plateNumber: normalizedPlateNumber
+    }, config);
+  } catch (error) {
+    console.error("[bot] plate number error", error);
+    await ctx.reply(getApiErrorMessage(error, "Avtomobil ma'lumotlarini saqlab bo'lmadi."), getMainKeyboard(config));
   }
 }
 
@@ -405,7 +610,7 @@ export function createBot(options = {}) {
   });
 
   bot.command("menu", async (ctx) => {
-    await ctx.reply("Buyurtma berish uchun quyidagi tugmani bosing.", getMainKeyboard(config));
+    await ctx.reply("Buyurtma berish yoki kuryer onboardingini boshlash uchun quyidagi tugmalardan foydalaning.", getMainKeyboard(config));
   });
 
   bot.command("help", async (ctx) => {
@@ -481,6 +686,21 @@ export function createBot(options = {}) {
       }
 
       await handleTransportSelection(ctx, selectedTransport.value, config);
+      return;
+    }
+
+    if (state.step === "transport_color") {
+      await handleTransportColorInput(ctx, text, config);
+      return;
+    }
+
+    if (state.step === "vehicle_brand") {
+      await handleVehicleBrandInput(ctx, text, config);
+      return;
+    }
+
+    if (state.step === "plate_number") {
+      await handlePlateNumberInput(ctx, text, config);
     }
   });
 

@@ -55,6 +55,12 @@ create table if not exists public.couriers (
   updated_at timestamptz not null default now()
 );
 
+alter table if exists public.couriers add column if not exists transport_type text;
+alter table if exists public.couriers add column if not exists online_status text not null default 'offline';
+alter table if exists public.couriers add column if not exists transport_color text;
+alter table if exists public.couriers add column if not exists vehicle_brand text;
+alter table if exists public.couriers add column if not exists plate_number text;
+
 alter table if exists public.orders add column if not exists courier_id uuid references public.couriers(id) on delete set null;
 alter table if exists public.orders add column if not exists assigned_at timestamptz;
 
@@ -188,6 +194,7 @@ set
   is_popular = excluded.is_popular,
   is_available = excluded.is_available,
   sort_order = excluded.sort_order;
+
 
 
 

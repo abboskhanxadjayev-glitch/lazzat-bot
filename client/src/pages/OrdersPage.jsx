@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { getMyOrders } from "../api/client";
 import OrderStatusBadge from "../components/OrderStatusBadge";
@@ -33,14 +33,32 @@ function formatCoordinate(value) {
   return Number(value).toFixed(6);
 }
 
+function getOrdersDiagnosticMessage({ isTelegramWebApp, initData, diagnostics }) {
+  if (!isTelegramWebApp) {
+    return "Buyurtmalar tarixini ko'rish uchun sahifani Telegram Mini App ichida oching.";
+  }
+
+  if (!initData) {
+    return "Telegram initData kelmadi. Botdagi Mini App tugmasidan qayta ochib ko'ring.";
+  }
+
+  if (!diagnostics.hasUnsafeUser && !diagnostics.hasParsedInitUser) {
+    return "Telegram initData mavjud, lekin foydalanuvchi identifikatori undan o'qilmadi. Sahifani bot ichidan qayta oching.";
+  }
+
+  return "Telegram foydalanuvchi identifikatori topilmadi.";
+}
+
 function OrdersPage() {
-  const { user, webApp } = useTelegram();
+  const { user, webApp, initData, isTelegramWebApp, diagnostics } = useTelegram();
   const [orders, setOrders] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const canLoadOrders = useMemo(() => Boolean(user?.id || initData), [initData, user?.id]);
+
   const loadOrders = useCallback(async () => {
-    if (!user?.id) {
+    if (!canLoadOrders) {
       setOrders([]);
       setIsLoading(false);
       return;
@@ -50,7 +68,7 @@ function OrdersPage() {
     setError("");
 
     try {
-      const nextOrders = await getMyOrders(user.id);
+      const nextOrders = await getMyOrders(user?.id || null);
       setOrders(nextOrders);
     } catch (requestError) {
       console.error("[orders] my orders load error", requestError);
@@ -59,13 +77,13 @@ function OrdersPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [user?.id, webApp]);
+  }, [canLoadOrders, user?.id, webApp]);
 
   useEffect(() => {
     loadOrders();
   }, [loadOrders]);
 
-  if (!user?.id) {
+  if (!canLoadOrders) {
     return (
       <div className="space-y-5">
         <PageHeader
@@ -74,8 +92,8 @@ function OrdersPage() {
           description="Buyurtmalar tarixini ko'rish uchun ilovani Telegram Mini App ichida ishga tushiring."
         />
 
-        <section className="surface-card text-sm leading-6 text-lazzat-ink/70">
-          Telegram foydalanuvchi identifikatori topilmadi.
+        <section className="surface-card space-y-3 text-sm leading-6 text-lazzat-ink/70">
+          <p>{getOrdersDiagnosticMessage({ isTelegramWebApp, initData, diagnostics })}</p>
         </section>
       </div>
     );
@@ -93,7 +111,7 @@ function OrdersPage() {
         <div>
           <p className="section-label">Mijoz</p>
           <p className="mt-2 text-base font-bold text-lazzat-maroon">
-            {user.first_name || "Telegram foydalanuvchi"}
+            {user?.first_name || "Telegram foydalanuvchi"}
           </p>
         </div>
         <button type="button" onClick={loadOrders} className="secondary-button">

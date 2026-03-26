@@ -9,6 +9,7 @@ import {
 } from "../services/orderService.js";
 import { createAppError } from "../utils/appError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { resolveTelegramIdentity } from "../utils/telegramAuth.js";
 import {
   assignCourierSchema,
   createOrderSchema,
@@ -16,10 +17,6 @@ import {
 } from "../utils/validation.js";
 
 const router = Router();
-
-function getSingleHeaderValue(value) {
-  return Array.isArray(value) ? value[0] : value;
-}
 
 router.get(
   "/",
@@ -32,14 +29,8 @@ router.get(
 router.get(
   "/my-orders",
   asyncHandler(async (req, res) => {
-    const telegramUserId = getSingleHeaderValue(req.headers["x-telegram-user-id"])
-      || getSingleHeaderValue(req.query.telegramUserId);
-
-    if (!telegramUserId) {
-      throw createAppError(400, "Telegram user ID kiritilishi kerak.");
-    }
-
-    const orders = await getOrdersByTelegramUserId(telegramUserId);
+    const telegramIdentity = resolveTelegramIdentity(req);
+    const orders = await getOrdersByTelegramUserId(telegramIdentity.telegramUserId);
     res.json({ data: orders });
   })
 );
@@ -115,7 +106,25 @@ router.post(
       throw createAppError(400, "So'rov ma'lumotlari noto'g'ri.", parsed.error.flatten());
     }
 
-    const order = await createOrder(parsed.data);
+    let orderPayload = parsed.data;
+
+    try {
+      const telegramIdentity = resolveTelegramIdentity(req, {
+        allowQueryFallback: false,
+        fieldLabel: "Telegram foydalanuvchi ma'lumotlari"
+      });
+
+      if (!orderPayload.telegramUser && telegramIdentity.telegramUser) {
+        orderPayload = {
+          ...orderPayload,
+          telegramUser: telegramIdentity.telegramUser
+        };
+      }
+    } catch {
+      // Order creation also works for non-Telegram contexts, so this identity augmentation stays optional.
+    }
+
+    const order = await createOrder(orderPayload);
     res.status(201).json({
       message: "Buyurtma muvaffaqiyatli yaratildi.",
       data: order

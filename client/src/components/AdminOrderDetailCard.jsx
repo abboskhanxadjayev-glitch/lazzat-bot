@@ -46,7 +46,7 @@ function AdminOrderDetailCard({
 
   const canOpenMap = order.customerLat !== null && order.customerLng !== null;
   const mapUrl = canOpenMap
-    ? `https://www.google.com/maps?q=${order.customerLat},${order.customerLng}`
+    ? `https://maps.google.com/?q=${order.customerLat},${order.customerLng}`
     : null;
   const assignedCourier = order.courier || null;
   const canAssignCourier = !assignmentUnavailableReason;

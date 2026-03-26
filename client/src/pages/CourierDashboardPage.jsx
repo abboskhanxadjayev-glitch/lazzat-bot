@@ -341,7 +341,7 @@ function CourierDashboardPage() {
                 {activeOrders.map((order) => {
                   const hasCoordinates = order.customerLat !== null && order.customerLng !== null;
                   const mapUrl = hasCoordinates
-                    ? `https://www.google.com/maps?q=${order.customerLat},${order.customerLng}`
+                    ? `https://maps.google.com/?q=${order.customerLat},${order.customerLng}`
                     : null;
                   const actionLabel = ["assigned", "ready_for_delivery"].includes(order.status) ? "Qabul qilish" : "Yetkazildi";
 

@@ -1121,6 +1121,20 @@ export async function handleClickPaymentWebhook(webhookPayload = {}) {
 
   const paymentMethod = orderRecord.payment_method || "cash";
   const paymentStatus = orderRecord.payment_status || "pending";
+  const expectedAmount = Number(orderRecord.total_amount || 0);
+
+  if (Math.abs(expectedAmount - clickPayload.amount) > 0.01) {
+    console.error("[click] webhook amount mismatch", {
+      orderId: clickPayload.orderId,
+      expectedAmount,
+      receivedAmount: clickPayload.amount
+    });
+
+    return {
+      error: -7,
+      error_note: "Amount mismatch."
+    };
+  }
 
   if (paymentMethod !== "click") {
     return {

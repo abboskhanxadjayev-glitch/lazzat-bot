@@ -110,7 +110,11 @@ router.patch(
 router.post(
   "/",
   asyncHandler(async (req, res) => {
-    const parsed = createOrderSchema.safeParse(req.body);
+    const normalizedBody = {
+      ...req.body,
+      paymentMethod: req.body?.paymentMethod ?? req.body?.payment_method
+    };
+    const parsed = createOrderSchema.safeParse(normalizedBody);
 
     if (!parsed.success) {
       throw createAppError(400, "So'rov ma'lumotlari noto'g'ri.", parsed.error.flatten());

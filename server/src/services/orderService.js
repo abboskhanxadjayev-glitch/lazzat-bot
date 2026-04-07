@@ -21,7 +21,11 @@ import {
   ensurePaymentSchemaReady,
   isOrderPaymentSchemaError
 } from "./paymentSchemaService.js";
-import { sendCourierAssignmentNotification, sendOrderNotification } from "./telegramService.js";
+import {
+  sendCourierAssignmentNotification,
+  sendCustomerClickPaymentPrompt,
+  sendOrderNotification
+} from "./telegramService.js";
 
 const LEGACY_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
 const PAYMENT_ORDER_SELECT_FIELDS = `${LEGACY_ORDER_SELECT_FIELDS}, payment_method, payment_status`;
@@ -1014,6 +1018,35 @@ export async function createOrder(payload) {
       orderId: createdOrder.id,
       reason: telegramError.message
     });
+  }
+
+  if (wantsClickPayment && createdOrder.paymentUrl) {
+    const customerTelegramUserId = Number(payload.telegramUser?.id);
+
+    if (Number.isInteger(customerTelegramUserId) && customerTelegramUserId > 0) {
+      try {
+        const customerTelegramResponse = await sendCustomerClickPaymentPrompt({
+          chatId: customerTelegramUserId,
+          paymentUrl: createdOrder.paymentUrl
+        });
+
+        console.log("[telegram] customer click payment prompt sent", {
+          orderId: createdOrder.id,
+          customerTelegramUserId,
+          messageId: customerTelegramResponse.messageId
+        });
+      } catch (customerTelegramError) {
+        console.error("[telegram] failed to send customer click payment prompt", {
+          orderId: createdOrder.id,
+          customerTelegramUserId,
+          reason: customerTelegramError.message
+        });
+      }
+    } else {
+      console.warn("[telegram] customer click payment prompt skipped because telegram user id is missing", {
+        orderId: createdOrder.id
+      });
+    }
   }
 
   return createdOrder;

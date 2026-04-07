@@ -18,6 +18,8 @@ export const ORDER_STATUS_VALUES = [
   "cancelled"
 ];
 
+export const ORDER_PAYMENT_METHOD_VALUES = ["cash", "click"];
+export const ORDER_PAYMENT_STATUS_VALUES = ["pending", "paid", "cancelled"];
 export const COURIER_STATUS_VALUES = ["pending", "approved", "blocked"];
 export const COURIER_TRANSPORT_VALUES = ["foot", "bike", "moto", "car"];
 export const COURIER_ONLINE_STATUS_VALUES = ["offline", "online"];
@@ -60,6 +62,11 @@ export const createOrderSchema = z
     deliveryDistanceKm: z.number().nonnegative().optional(),
     deliveryFee: z.number().nonnegative().optional(),
     totalAmount: z.number().nonnegative().optional(),
+    paymentMethod: z.enum(ORDER_PAYMENT_METHOD_VALUES, {
+      errorMap: () => ({
+        message: "To'lov turi noto'g'ri. Cash yoki Click tanlang."
+      })
+    }).default("cash"),
     items: z
       .array(
         z.object({
@@ -93,6 +100,13 @@ export const updateOrderStatusSchema = z.object({
 
 export const assignCourierSchema = z.object({
   courierId: z.string().uuid("Kuryer ID noto'g'ri.").nullable().optional()
+});
+
+export const clickWebhookSchema = z.object({
+  transaction_param: z.string().trim().min(1, "transaction_param kiritilishi kerak."),
+  amount: z.coerce.number().positive("amount musbat bo'lishi kerak."),
+  service_id: z.string().trim().optional(),
+  merchant_id: z.string().trim().optional()
 });
 
 export const ensureCourierSchema = z.object({

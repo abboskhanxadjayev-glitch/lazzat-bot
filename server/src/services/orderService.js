@@ -8,6 +8,7 @@ import {
   roundDistanceKm
 } from "../utils/delivery.js";
 import { getProductsByIds } from "./catalogService.js";
+import { createClickPayment, ensureClickConfigReady, validateClickWebhookPayload } from "./clickService.js";
 import {
   ensureCourierProfileSchemaReady,
   ensureCourierSchemaReady,
@@ -15,10 +16,17 @@ import {
   isCourierSchemaError
 } from "./courierSchemaService.js";
 import { notifyOperatorStatusChanged } from "./operatorNotificationService.js";
+import {
+  createPaymentSchemaNotReadyError,
+  ensurePaymentSchemaReady,
+  isOrderPaymentSchemaError
+} from "./paymentSchemaService.js";
 import { sendCourierAssignmentNotification, sendOrderNotification } from "./telegramService.js";
 
 const LEGACY_ORDER_SELECT_FIELDS = "id, customer_name, phone, address, notes, total_amount, status, source, created_at, customer_lat, customer_lng, delivery_distance_km, delivery_fee, telegram_payload";
-const RELATION_ORDER_SELECT_FIELDS = `${LEGACY_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
+const PAYMENT_ORDER_SELECT_FIELDS = `${LEGACY_ORDER_SELECT_FIELDS}, payment_method, payment_status`;
+const LEGACY_RELATION_ORDER_SELECT_FIELDS = `${LEGACY_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
+const RELATION_ORDER_SELECT_FIELDS = `${PAYMENT_ORDER_SELECT_FIELDS}, courier_id, assigned_at, courier:courier_id(id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at)`;
 const ENHANCED_ORDER_SELECT_FIELDS = `${RELATION_ORDER_SELECT_FIELDS}, assignment_method, assignment_distance_km`;
 const COURIER_ASSIGNMENT_BASE_SELECT_FIELDS = "id, telegram_user_id, username, full_name, phone, status, is_active, online_status, created_at, updated_at";
 const COURIER_ASSIGNMENT_LOCATION_SELECT_FIELDS = `${COURIER_ASSIGNMENT_BASE_SELECT_FIELDS}, base_latitude, base_longitude`;
@@ -43,6 +51,13 @@ let courierAssignmentLocationCache = {
   available: null,
   checkedAt: 0
 };
+
+function resetOrderQuerySchemaCache() {
+  orderQuerySchemaCache = {
+    mode: null,
+    checkedAt: 0
+  };
+}
 
 function ensureSupabaseReady() {
   if (supabase) {
@@ -118,7 +133,12 @@ async function runOrderQuery(buildQuery) {
   const canReuseOrderQueryMode = hasFreshCache(orderQuerySchemaCache.checkedAt, ORDER_QUERY_SCHEMA_TTL_MS);
   const currentMode = canReuseOrderQueryMode ? orderQuerySchemaCache.mode : null;
 
-  if (currentMode !== "relation" && currentMode !== "legacy") {
+  if (
+    currentMode !== "relation_payment"
+    && currentMode !== "relation_legacy"
+    && currentMode !== "payment"
+    && currentMode !== "legacy"
+  ) {
     const enhancedResult = await buildQuery(ENHANCED_ORDER_SELECT_FIELDS);
 
     if (!enhancedResult.error) {
@@ -129,29 +149,69 @@ async function runOrderQuery(buildQuery) {
       return enhancedResult;
     }
 
-    if (!isOrderRelationSchemaError(enhancedResult.error) && !isOrderAssignmentMetadataError(enhancedResult.error)) {
+    if (
+      !isOrderRelationSchemaError(enhancedResult.error)
+      && !isOrderAssignmentMetadataError(enhancedResult.error)
+      && !isOrderPaymentSchemaError(enhancedResult.error)
+    ) {
       return enhancedResult;
     }
 
     console.warn("[orders] enhanced order select unavailable, falling back", enhancedResult.error.message);
   }
 
-  if (currentMode !== "legacy") {
+  if (currentMode !== "relation_legacy" && currentMode !== "payment" && currentMode !== "legacy") {
     const relationResult = await buildQuery(RELATION_ORDER_SELECT_FIELDS);
 
     if (!relationResult.error) {
       orderQuerySchemaCache = {
-        mode: "relation",
+        mode: "relation_payment",
         checkedAt: Date.now()
       };
       return relationResult;
     }
 
-    if (!isOrderRelationSchemaError(relationResult.error)) {
+    if (!isOrderRelationSchemaError(relationResult.error) && !isOrderPaymentSchemaError(relationResult.error)) {
       return relationResult;
     }
 
-    console.warn("[orders] courier relation fields unavailable, falling back", relationResult.error.message);
+    console.warn("[orders] payment-aware relation fields unavailable, falling back", relationResult.error.message);
+  }
+
+  if (currentMode !== "payment" && currentMode !== "legacy") {
+    const legacyRelationResult = await buildQuery(LEGACY_RELATION_ORDER_SELECT_FIELDS);
+
+    if (!legacyRelationResult.error) {
+      orderQuerySchemaCache = {
+        mode: "relation_legacy",
+        checkedAt: Date.now()
+      };
+      return legacyRelationResult;
+    }
+
+    if (!isOrderRelationSchemaError(legacyRelationResult.error)) {
+      return legacyRelationResult;
+    }
+
+    console.warn("[orders] legacy courier relation fields unavailable, falling back", legacyRelationResult.error.message);
+  }
+
+  if (currentMode !== "legacy") {
+    const paymentResult = await buildQuery(PAYMENT_ORDER_SELECT_FIELDS);
+
+    if (!paymentResult.error) {
+      orderQuerySchemaCache = {
+        mode: "payment",
+        checkedAt: Date.now()
+      };
+      return paymentResult;
+    }
+
+    if (!isOrderPaymentSchemaError(paymentResult.error)) {
+      return paymentResult;
+    }
+
+    console.warn("[orders] payment fields unavailable, falling back", paymentResult.error.message);
   }
 
   const legacyResult = await buildQuery(LEGACY_ORDER_SELECT_FIELDS);
@@ -223,7 +283,7 @@ function buildTelegramPayload(payload) {
   };
 }
 
-function buildOrderPayload(payload, subtotalAmount, deliveryDetails) {
+function buildBaseOrderPayload(payload, subtotalAmount, deliveryDetails) {
   return {
     customer_name: payload.customerName,
     phone: payload.phone,
@@ -237,6 +297,20 @@ function buildOrderPayload(payload, subtotalAmount, deliveryDetails) {
     status: "pending",
     source: "telegram_mini_app",
     telegram_payload: buildTelegramPayload(payload)
+  };
+}
+
+function buildOrderPayload(payload, subtotalAmount, deliveryDetails, includePaymentFields = true) {
+  const basePayload = buildBaseOrderPayload(payload, subtotalAmount, deliveryDetails);
+
+  if (!includePaymentFields) {
+    return basePayload;
+  }
+
+  return {
+    ...basePayload,
+    payment_method: payload.paymentMethod || "cash",
+    payment_status: "pending"
   };
 }
 
@@ -295,6 +369,25 @@ function buildAssignmentReason(assignmentMethod, assignmentDistanceKm) {
   return "";
 }
 
+function createClickPaymentUrlSafely(orderId, totalAmount, paymentMethod) {
+  if (paymentMethod !== "click") {
+    return null;
+  }
+
+  try {
+    return createClickPayment({
+      orderId,
+      amount: totalAmount
+    });
+  } catch (error) {
+    console.warn("[click] failed to build payment URL for order response", {
+      orderId,
+      reason: error.message
+    });
+    return null;
+  }
+}
+
 function mapOrderRecord(orderRecord, orderItems = []) {
   const fallbackDelivery = orderRecord.telegram_payload?.delivery || null;
   const customerLat = orderRecord.customer_lat ?? fallbackDelivery?.customerLat ?? null;
@@ -321,6 +414,9 @@ function mapOrderRecord(orderRecord, orderItems = []) {
     ? null
     : Number(orderRecord.assignment_distance_km);
   const assignmentReason = buildAssignmentReason(assignmentMethod, assignmentDistanceKm);
+  const paymentMethod = orderRecord.payment_method || "cash";
+  const paymentStatus = orderRecord.payment_status || "pending";
+  const paymentUrl = createClickPaymentUrlSafely(orderRecord.id, totalAmount, paymentMethod);
 
   return {
     id: orderRecord.id,
@@ -343,6 +439,9 @@ function mapOrderRecord(orderRecord, orderItems = []) {
     courier,
     assignmentMethod,
     assignmentDistanceKm,
+    paymentMethod,
+    paymentStatus,
+    paymentUrl,
     customer: {
       name: orderRecord.customer_name,
       phone: orderRecord.phone
@@ -369,6 +468,11 @@ function mapOrderRecord(orderRecord, orderItems = []) {
       method: assignmentMethod,
       distanceKm: assignmentDistanceKm,
       reason: assignmentReason
+    },
+    payment: {
+      method: paymentMethod,
+      status: paymentStatus,
+      url: paymentUrl
     }
   };
 }
@@ -456,6 +560,29 @@ async function updateOrderRecordStatus(orderId, status) {
 
   if (error) {
     throw createAppError(500, "Buyurtma statusini yangilab bo'lmadi.", error);
+  }
+
+  if (!data) {
+    throw createAppError(404, "Buyurtma topilmadi.", { orderId });
+  }
+
+  return data;
+}
+
+async function updateOrderPaymentStatus(orderId, paymentStatus) {
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ payment_status: paymentStatus })
+    .eq("id", orderId)
+    .select("id, payment_status")
+    .maybeSingle();
+
+  if (error) {
+    if (isOrderPaymentSchemaError(error)) {
+      await ensurePaymentSchemaReady();
+    }
+
+    throw createAppError(500, "Buyurtma to'lov holatini yangilab bo'lmadi.", error);
   }
 
   if (!data) {
@@ -797,15 +924,22 @@ export async function createOrder(payload) {
   const items = normalizeItems(products, payload.items);
   const subtotalAmount = items.reduce((sum, item) => sum + item.lineTotal, 0);
   const deliveryDetails = getDeliveryDetails(payload);
+  const totalAmount = subtotalAmount + deliveryDetails.deliveryFee;
+  const wantsClickPayment = (payload.paymentMethod || "cash") === "click";
 
   if (
     typeof payload.totalAmount === "number" &&
-    Math.abs(payload.totalAmount - (subtotalAmount + deliveryDetails.deliveryFee)) > 1
+    Math.abs(payload.totalAmount - totalAmount) > 1
   ) {
     console.warn("[orders] client total differed from server calculation; server total was used.", {
       clientTotal: payload.totalAmount,
-      serverTotal: subtotalAmount + deliveryDetails.deliveryFee
+      serverTotal: totalAmount
     });
+  }
+
+  if (wantsClickPayment) {
+    ensureClickConfigReady();
+    await ensurePaymentSchemaReady();
   }
 
   console.log(`[orders] inserting Supabase order for ${payload.customerName} with ${items.length} item(s)`);
@@ -816,7 +950,18 @@ export async function createOrder(payload) {
     deliveryFee: deliveryDetails.deliveryFee
   });
 
-  const { data: order, error: orderError } = await insertOrder(buildOrderPayload(payload, subtotalAmount, deliveryDetails));
+  let orderInsertResult = await insertOrder(buildOrderPayload(payload, subtotalAmount, deliveryDetails, true));
+
+  if (orderInsertResult.error && isOrderPaymentSchemaError(orderInsertResult.error)) {
+    if (wantsClickPayment) {
+      throw createPaymentSchemaNotReadyError(orderInsertResult.error.message);
+    }
+
+    console.warn("[orders] payment columns unavailable during insert, falling back to legacy order payload", orderInsertResult.error.message);
+    orderInsertResult = await insertOrder(buildOrderPayload(payload, subtotalAmount, deliveryDetails, false));
+  }
+
+  const { data: order, error: orderError } = orderInsertResult;
 
   if (orderError || !order) {
     console.error("[orders] insert into orders failed", orderError);
@@ -844,6 +989,10 @@ export async function createOrder(payload) {
   await autoAssignOrder(order.id);
 
   console.log(`[orders] Supabase order ${order.id} created successfully with delivery columns.`);
+
+  if (wantsClickPayment) {
+    resetOrderQuerySchemaCache();
+  }
 
   const storedOrder = await getOrderRecordById(order.id);
   const createdOrder = mapOrderRecord(storedOrder, items);
@@ -930,6 +1079,71 @@ export async function getOrderById(orderId) {
   const itemsByOrderId = await getOrderItemsByOrderIds([orderId]);
 
   return mapOrderRecord(orderRecord, itemsByOrderId.get(orderId) || []);
+}
+
+export async function handleClickPaymentWebhook(webhookPayload = {}) {
+  ensureSupabaseReady();
+  ensureClickConfigReady();
+  await ensurePaymentSchemaReady();
+  resetOrderQuerySchemaCache();
+
+  console.log("[click] webhook payload received", webhookPayload);
+
+  let clickPayload;
+
+  try {
+    clickPayload = validateClickWebhookPayload(webhookPayload);
+  } catch (error) {
+    console.error("[click] invalid webhook payload", {
+      reason: error.message,
+      payload: webhookPayload
+    });
+    return {
+      error: -1,
+      error_note: error.message
+    };
+  }
+
+  let orderRecord = null;
+
+  try {
+    orderRecord = await getOrderRecordById(clickPayload.orderId);
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return {
+        error: -5,
+        error_note: "Order not found."
+      };
+    }
+
+    throw error;
+  }
+
+  const paymentMethod = orderRecord.payment_method || "cash";
+  const paymentStatus = orderRecord.payment_status || "pending";
+
+  if (paymentMethod !== "click") {
+    return {
+      error: -6,
+      error_note: "Order payment method is not CLICK."
+    };
+  }
+
+  if (paymentStatus === "paid") {
+    console.log("[click] webhook ignored because order is already paid", {
+      orderId: clickPayload.orderId
+    });
+    return { error: 0 };
+  }
+
+  await updateOrderPaymentStatus(clickPayload.orderId, "paid");
+
+  console.log("[click] order payment marked as paid", {
+    orderId: clickPayload.orderId,
+    amount: clickPayload.amount
+  });
+
+  return { error: 0 };
 }
 
 export async function assignCourierToOrder(orderId, courierId = null) {

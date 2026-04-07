@@ -3,6 +3,10 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || "";
 const telegramChatId = process.env.TELEGRAM_CHAT_ID || "";
 const courierJwtSecret = process.env.COURIER_JWT_SECRET || "";
+const clickServiceId = process.env.CLICK_SERVICE_ID || "";
+const clickMerchantId = process.env.CLICK_MERCHANT_ID || "";
+const clickSecretKey = process.env.CLICK_SECRET_KEY || "";
+const clickReturnUrl = process.env.CLICK_RETURN_URL || "";
 
 function isPlaceholderValue(value) {
   return (
@@ -10,7 +14,11 @@ function isPlaceholderValue(value) {
     value.includes("your-service-role-key") ||
     value.includes("your-telegram-bot-token") ||
     value.includes("your-telegram-chat-id") ||
-    value.includes("your-courier-jwt-secret")
+    value.includes("your-courier-jwt-secret") ||
+    value.includes("your-click-service-id") ||
+    value.includes("your-click-merchant-id") ||
+    value.includes("your-click-secret-key") ||
+    value.includes("your-click-return-url")
   );
 }
 
@@ -49,6 +57,16 @@ const hasTelegramNotifications = Boolean(
   !isPlaceholderValue(telegramBotToken) &&
   !isPlaceholderValue(telegramChatId)
 );
+const hasClickPayments = Boolean(
+  clickServiceId &&
+  clickMerchantId &&
+  clickSecretKey &&
+  clickReturnUrl &&
+  !isPlaceholderValue(clickServiceId) &&
+  !isPlaceholderValue(clickMerchantId) &&
+  !isPlaceholderValue(clickSecretKey) &&
+  !isPlaceholderValue(clickReturnUrl)
+);
 
 export const env = {
   port: Number(process.env.PORT || 5000),
@@ -58,7 +76,12 @@ export const env = {
   telegramBotToken,
   telegramChatId,
   courierJwtSecret,
+  clickServiceId,
+  clickMerchantId,
+  clickSecretKey,
+  clickReturnUrl,
   supabaseConfigError,
   hasSupabase: !supabaseConfigError,
-  hasTelegramNotifications
+  hasTelegramNotifications,
+  hasClickPayments
 };

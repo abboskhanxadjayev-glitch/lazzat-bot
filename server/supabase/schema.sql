@@ -32,6 +32,8 @@ create table if not exists public.orders (
   delivery_distance_km double precision not null default 0,
   delivery_fee integer not null default 0,
   total_amount numeric(10, 2) not null,
+  payment_method text not null default 'cash',
+  payment_status text not null default 'pending',
   status text not null default 'pending',
   source text not null default 'telegram_mini_app',
   telegram_payload jsonb,
@@ -42,6 +44,8 @@ alter table if exists public.orders add column if not exists customer_lat double
 alter table if exists public.orders add column if not exists customer_lng double precision;
 alter table if exists public.orders add column if not exists delivery_distance_km double precision not null default 0;
 alter table if exists public.orders add column if not exists delivery_fee integer not null default 0;
+alter table if exists public.orders add column if not exists payment_method text not null default 'cash';
+alter table if exists public.orders add column if not exists payment_status text not null default 'pending';
 
 create table if not exists public.couriers (
   id uuid primary key default gen_random_uuid(),
@@ -70,6 +74,8 @@ alter table if exists public.orders add column if not exists assigned_at timesta
 create index if not exists couriers_status_idx on public.couriers(status);
 create index if not exists orders_courier_id_idx on public.orders(courier_id);
 create index if not exists orders_assigned_at_idx on public.orders(assigned_at);
+create index if not exists orders_payment_method_idx on public.orders(payment_method);
+create index if not exists orders_payment_status_idx on public.orders(payment_status);
 
 create table if not exists public.order_items (
   id uuid primary key default gen_random_uuid(),

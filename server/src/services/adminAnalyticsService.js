@@ -5,6 +5,7 @@ import {
   ensureCourierProfileSchemaReady,
   ensureCourierSchemaReady
 } from "./courierSchemaService.js";
+import { isOrderPaymentSchemaError } from "./paymentSchemaService.js";
 
 const ACTIVE_ORDER_STATUSES = ["pending", "assigned", "accepted", "preparing", "ready_for_delivery", "on_the_way"];
 const TODAY_TIME_ZONE = "Asia/Tashkent";
@@ -50,6 +51,10 @@ function toBoolean(value) {
   return Boolean(value);
 }
 
+function isPaidOrder(order) {
+  return (order.payment_status || "pending") === "paid";
+}
+
 function buildCourierPerformanceRows(couriers, orders, currentDayKey) {
   const rows = new Map(
     couriers.map((courier) => [courier.id, {
@@ -82,7 +87,10 @@ function buildCourierPerformanceRows(couriers, orders, currentDayKey) {
 
     if (order.status === "delivered" && isSameBusinessDay(order.created_at, currentDayKey)) {
       row.deliveredOrdersToday += 1;
-      row.totalDeliveredRevenueToday += toMoney(order.total_amount);
+
+      if (isPaidOrder(order)) {
+        row.totalDeliveredRevenueToday += toMoney(order.total_amount);
+      }
     }
   });
 
@@ -102,15 +110,34 @@ function buildCourierPerformanceRows(couriers, orders, currentDayKey) {
 async function getAnalyticsOrders() {
   const { data, error } = await supabase
     .from("orders")
+    .select("id,status,total_amount,delivery_fee,courier_id,created_at,payment_status")
+    .order("created_at", { ascending: false })
+    .limit(1000);
+
+  if (!error) {
+    return data || [];
+  }
+
+  if (!isOrderPaymentSchemaError(error)) {
+    throw createAppError(500, "Analitika uchun buyurtmalarni yuklab bo'lmadi.", error);
+  }
+
+  console.warn("[analytics] payment fields unavailable, falling back to legacy revenue behavior", error.message);
+
+  const legacyResult = await supabase
+    .from("orders")
     .select("id,status,total_amount,delivery_fee,courier_id,created_at")
     .order("created_at", { ascending: false })
     .limit(1000);
 
-  if (error) {
-    throw createAppError(500, "Analitika uchun buyurtmalarni yuklab bo'lmadi.", error);
+  if (legacyResult.error) {
+    throw createAppError(500, "Analitika uchun buyurtmalarni yuklab bo'lmadi.", legacyResult.error);
   }
 
-  return data || [];
+  return (legacyResult.data || []).map((order) => ({
+    ...order,
+    payment_status: "paid"
+  }));
 }
 
 async function getAnalyticsCouriers() {
@@ -140,14 +167,16 @@ export async function getAdminAnalytics() {
 
   const currentDayKey = getDayKey(new Date());
   const todayOrders = orders.filter((order) => isSameBusinessDay(order.created_at, currentDayKey));
-  const todayRevenue = todayOrders.reduce((sum, order) => sum + toMoney(order.total_amount), 0);
-  const todayDeliveryFeeTotal = todayOrders.reduce((sum, order) => sum + toMoney(order.delivery_fee), 0);
+  const paidOrders = orders.filter(isPaidOrder);
+  const paidTodayOrders = todayOrders.filter(isPaidOrder);
+  const todayRevenue = paidTodayOrders.reduce((sum, order) => sum + toMoney(order.total_amount), 0);
+  const todayDeliveryFeeTotal = paidTodayOrders.reduce((sum, order) => sum + toMoney(order.delivery_fee), 0);
   const activeOrderCount = orders.filter((order) => ACTIVE_ORDER_STATUSES.includes(order.status)).length;
   const deliveredOrderCount = orders.filter((order) => order.status === "delivered").length;
   const approvedCouriers = couriers.filter((courier) => courier.status === "approved" && toBoolean(courier.is_active));
   const onlineCourierCount = approvedCouriers.filter((courier) => (courier.online_status || "offline") === "online").length;
   const offlineCourierCount = Math.max(approvedCouriers.length - onlineCourierCount, 0);
-  const averageOrderValueToday = todayOrders.length ? todayRevenue / todayOrders.length : 0;
+  const averageOrderValueToday = paidTodayOrders.length ? todayRevenue / paidTodayOrders.length : 0;
   const courierPerformance = buildCourierPerformanceRows(couriers, orders, currentDayKey);
   const topCourierTodayByDeliveredOrders = courierPerformance
     .filter((row) => row.deliveredOrdersToday > 0)
@@ -173,6 +202,7 @@ export async function getAdminAnalytics() {
     todayRevenue,
     activeOrderCount,
     deliveredOrderCount,
+    paidOrdersCount: paidOrders.length,
     onlineCourierCount,
     offlineCourierCount,
     todayDeliveryFeeTotal,

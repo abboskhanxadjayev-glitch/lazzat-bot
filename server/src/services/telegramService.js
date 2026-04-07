@@ -173,6 +173,7 @@ export async function sendCourierAssignmentNotification({ chatId, order }) {
     ? `https://maps.google.com/?q=${order.customerLat},${order.customerLng}`
     : null;
   const dashboardUrl = getCourierDashboardUrl();
+  const paymentLabel = String(order.paymentMethod || "cash").toUpperCase();
   const distanceText = order.deliveryDistanceKm === null || order.deliveryDistanceKm === undefined
     ? "Noma'lum"
     : Number(order.deliveryDistanceKm).toFixed(2);
@@ -181,18 +182,27 @@ export async function sendCourierAssignmentNotification({ chatId, order }) {
     `Manzil: ${order.address}`,
     `Masofa: ${distanceText} km`,
     `Summa: ${formatTelegramMoney(order.totalAmount)} UZS`,
+    `\u{1F4B3} Payment: ${paymentLabel}`,
     "",
     "\u{1F449} Panelni ochish:",
     dashboardUrl
   ].join("\n");
 
+  const buttons = [[
+    mapUrl ? { text: "Xaritada ochish", url: mapUrl } : null,
+    { text: "Panelni ochish", url: dashboardUrl }
+  ]];
+
+  if (order.paymentMethod === "click" && order.paymentUrl) {
+    buttons.push([
+      { text: "\u{1F4B3} Pay via Click", url: order.paymentUrl }
+    ]);
+  }
+
   return sendTelegramMessage({
     chatId,
     text: message,
-    buttons: [[
-      mapUrl ? { text: "Xaritada ochish", url: mapUrl } : null,
-      { text: "Panelni ochish", url: dashboardUrl }
-    ]]
+    buttons
   });
 }
 
